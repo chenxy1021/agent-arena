@@ -150,7 +150,7 @@ label {
 
 .labelrow { display: flex; align-items: center; justify-content: space-between; }
 
-textarea, input[type="text"], input[type="url"], input[type="password"], input[type="number"] {
+textarea, input {
   width: 100%;
   background: #0a1017;
   border: 1px solid var(--line);
