@@ -90,12 +90,97 @@ const TallyMarks = {
   `,
 };
 
+const RobotAvatar = {
+  props: {
+    name: { type: String, default: '' },
+    color: { type: String, default: '#ff6b81' },
+    state: { type: String, default: 'idle' },
+    size: { type: [Number, String], default: 64 },
+    spec: { type: Object, required: true },
+  },
+  template: `
+    <svg class="robot-avatar" :class="'robot-' + state" :width="size" :height="size"
+      :style="{ '--robot-color': color }" viewBox="0 0 64 64" role="img"
+      :aria-label="name || '机器人头像'">
+      <ellipse class="robot-shadow" cx="32" cy="57" rx="18" ry="4"/>
+
+      <g class="robot-antenna">
+        <template v-if="spec.antenna === 'straight'">
+          <path d="M32 12V5"/><circle cx="32" cy="4" r="2"/>
+        </template>
+        <template v-else-if="spec.antenna === 'twin'">
+          <path d="M25 12 21 5M39 12 43 5"/><circle cx="21" cy="4.5" r="1.7"/><circle cx="43" cy="4.5" r="1.7"/>
+        </template>
+        <template v-else-if="spec.antenna === 'ring'">
+          <path d="M32 12V8"/><circle cx="32" cy="6" r="3.5"/>
+        </template>
+        <template v-else-if="spec.antenna === 'ball'">
+          <path d="M32 12V8"/><circle cx="32" cy="6.5" r="2.6"/>
+        </template>
+      </g>
+
+      <g class="robot-body">
+        <rect v-if="spec.body === 'block'" x="22" y="38" width="20" height="15" rx="5"/>
+        <circle v-else-if="spec.body === 'ball'" cx="32" cy="45" r="11"/>
+        <polygon v-else-if="spec.body === 'trapezoid'" points="23,38 41,38 47,54 17,54"/>
+        <path v-else d="M20 39h24l5 15H15z"/>
+        <path class="robot-body-light" d="M27 42h10" />
+      </g>
+
+      <g class="robot-head">
+        <rect v-if="spec.head === 'capsule'" x="17" y="13" width="30" height="24" rx="12"/>
+        <rect v-else-if="spec.head === 'square'" x="16" y="14" width="32" height="23" rx="5"/>
+        <polygon v-else-if="spec.head === 'hex'" points="22,12 42,12 50,25 42,38 22,38 14,25"/>
+        <rect v-else-if="spec.head === 'crt'" x="14" y="14" width="36" height="24" rx="3"/>
+        <polygon v-else-if="spec.head === 'trapezoid'" points="22,13 42,13 48,38 16,38"/>
+        <circle v-else cx="32" cy="25" r="14"/>
+        <rect class="robot-screen" x="21" y="20" width="22" height="11" rx="3"/>
+      </g>
+
+      <g v-if="state === 'out'" class="robot-eyes robot-x-eyes">
+        <path d="m24 22 5 5m0-5-5 5M35 22l5 5m0-5-5 5"/>
+      </g>
+      <g v-else-if="state === 'thinking'" class="robot-eyes robot-loading-eyes">
+        <circle cx="25" cy="25" r="2"/><circle cx="32" cy="25" r="2"/><circle cx="39" cy="25" r="2"/>
+      </g>
+      <g v-else class="robot-eyes">
+        <rect v-if="spec.eyes === 'led'" x="24" y="23" width="16" height="4" rx="2"/>
+        <template v-else-if="spec.eyes === 'round'"><circle cx="26" cy="25" r="3"/><circle cx="38" cy="25" r="3"/></template>
+        <template v-else-if="spec.eyes === 'three'"><circle cx="24" cy="25" r="2"/><circle cx="32" cy="25" r="2"/><circle cx="40" cy="25" r="2"/></template>
+        <template v-else-if="spec.eyes === 'pixel'">
+          <rect x="23" y="21" width="4" height="4"/><rect x="29" y="21" width="4" height="4"/><rect x="35" y="21" width="4" height="4"/>
+          <rect x="26" y="26" width="4" height="4"/><rect x="32" y="26" width="4" height="4"/>
+        </template>
+        <path v-else-if="spec.eyes === 'curve'" d="M23 25q5-5 9 0t9 0"/>
+        <path v-else d="M23 22h18M23 25h18M23 28h18"/>
+      </g>
+
+      <g v-if="state === 'speaking'" class="robot-voice">
+        <rect x="26" y="33" width="2" height="4"/><rect x="31" y="32" width="2" height="6"/><rect x="36" y="33" width="2" height="4"/>
+      </g>
+
+      <g class="robot-accessory">
+        <path v-if="spec.accessory === 'headset'" d="M15 25a17 17 0 0 1 34 0M15 25v7h4v-7zm30 0v7h4v-7z"/>
+        <polygon v-else-if="spec.accessory === 'tie'" points="32,38 28,42 32,51 36,42"/>
+        <path v-else-if="spec.accessory === 'arm'" d="M42 43h9v3h-6l-3 4"/>
+        <circle v-else-if="spec.accessory === 'gear'" cx="49" cy="45" r="5"/><path v-if="spec.accessory === 'gear'" d="M49 37v16M41 45h16"/>
+        <path v-else-if="spec.accessory === 'scarf'" d="M22 38q10 5 20 0v5q-10 5-20 0z"/>
+      </g>
+
+      <g v-if="state === 'winner'" class="robot-halo">
+        <ellipse cx="32" cy="8" rx="10" ry="3"/>
+      </g>
+    </svg>
+  `,
+};
+
 Vue.createApp({
-  components: { RollingNumber, TallyMarks },
+  components: { RollingNumber, TallyMarks, RobotAvatar },
 
   data() {
     return {
       proposition: '',
+      currentPage: 'register',
       mode: 'eliminate',
       timeout: 240,
       models: [],
@@ -162,10 +247,22 @@ Vue.createApp({
       openedPaper: null,
       voteChips: [],
       voteChipSeq: 0,
+      robotVariants: {},
+      recordAgentFilter: '',
+      recordRoundFilter: 0,
     };
   },
 
   computed: {
+    currentPageLabel() {
+      return {
+        register: '登记',
+        venue: '会场',
+        record: '记录',
+        archive: '档案',
+        models: '模型',
+      }[this.currentPage] || '登记';
+    },
     selectedModelIds() {
       return this.models.filter((m) => m.checked).map((m) => m.id);
     },
@@ -301,11 +398,37 @@ Vue.createApp({
       const sec = String(Math.floor(remaining % 60)).padStart(2, '0');
       return `${min}:${sec}`;
     },
+    recordVisibleRounds() {
+      let rounds = [...this.rounds];
+      if (this.recordRoundFilter) {
+        rounds = rounds.filter((round) => round.no === this.recordRoundFilter);
+      }
+      return rounds.sort((a, b) => b.no - a.no);
+    },
+    recordActiveRound() {
+      if (this.recordRoundFilter) {
+        return this.rounds.find((round) => round.no === this.recordRoundFilter) || null;
+      }
+      return this.rounds.find((round) => round.no === this.currentRound)
+        || this.rounds[this.rounds.length - 1]
+        || null;
+    },
+    recordAgents() {
+      return this.participants.map((participant) => participant.name);
+    },
+    modelPreviewKey() {
+      return this.modelForm.name || this.modelForm.model || 'new-model';
+    },
   },
 
   mounted() {
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.soundOn = window.localStorage.getItem('arena-sound') === 'on';
+    try {
+      this.robotVariants = JSON.parse(window.localStorage.getItem('arena-robot-variants') || '{}');
+    } catch (_) {
+      this.robotVariants = {};
+    }
     this.loadModels();
     this.loadHistory();
     this.attachActive();
@@ -333,10 +456,90 @@ Vue.createApp({
     newMatch() {
       this.resetArena();
       this.proposition = '';
+      this.currentPage = 'register';
     },
 
     roundNo(no) {
       return String(no).padStart(2, '0');
+    },
+
+    goPage(page) {
+      this.currentPage = page;
+      if (page === 'venue') this.$nextTick(this.setupStage);
+    },
+
+    robotSpec(name) {
+      const text = String(name || 'robot');
+      let hash = 2166136261;
+      for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      hash ^= Number(this.robotVariants[text] || 0) + 0x9e3779b9;
+      hash = Math.imul(hash ^ (hash >>> 16), 2246822507);
+      hash = Math.imul(hash ^ (hash >>> 13), 3266489909);
+      hash ^= hash >>> 16;
+      const heads = ['capsule', 'square', 'hex', 'crt', 'trapezoid', 'round'];
+      const eyes = ['led', 'round', 'three', 'pixel', 'curve', 'grille'];
+      const antennas = ['straight', 'twin', 'ring', 'ball', 'none'];
+      const bodies = ['block', 'ball', 'trapezoid', 'shoulder'];
+      const accessories = ['headset', 'tie', 'arm', 'gear', 'scarf', 'none'];
+      return {
+        head: heads[Math.abs(hash) % heads.length],
+        eyes: eyes[Math.abs(hash >>> 3) % eyes.length],
+        antenna: antennas[Math.abs(hash >>> 7) % antennas.length],
+        body: bodies[Math.abs(hash >>> 11) % bodies.length],
+        accessory: accessories[Math.abs(hash >>> 15) % accessories.length],
+      };
+    },
+
+    robotState(name) {
+      const participant = this.participants.find((item) => item.name === name);
+      if (this.winnerName === name) return 'winner';
+      if (participant?.state === 'out') return 'out';
+      if (participant?.state === 'thinking') return 'thinking';
+      if (this.running && this.activeAgent === name) return 'speaking';
+      return 'idle';
+    },
+
+    rerollRobot(name) {
+      const key = String(name || 'new-model');
+      this.robotVariants = {
+        ...this.robotVariants,
+        [key]: Number(this.robotVariants[key] || 0) + 1,
+      };
+      window.localStorage.setItem('arena-robot-variants', JSON.stringify(this.robotVariants));
+    },
+
+    archiveRobots(item) {
+      const count = Math.max(0, Math.min(6, Number(item.participants || 0)));
+      return Array.from({ length: count }, (_, index) => {
+        const name = index === 0 && item.winner ? item.winner : `${item.id}-archive-${index}`;
+        return {
+          name,
+          winner: index === 0 && !!item.winner,
+          out: index > 0,
+        };
+      });
+    },
+
+    selectRecordAgent(name) {
+      this.recordAgentFilter = this.recordAgentFilter === name ? '' : name;
+    },
+
+    selectRecordRound(no) {
+      this.recordRoundFilter = no;
+      this.$nextTick(() => {
+        document.querySelector(`[data-record-round="${no}"]`)?.scrollIntoView({
+          behavior: this.reducedMotion ? 'auto' : 'smooth',
+          block: 'start',
+        });
+      });
+    },
+
+    filteredSpeeches(round) {
+      if (!this.recordAgentFilter) return round.speeches || [];
+      return (round.speeches || []).filter((speech) => speech.agent === this.recordAgentFilter);
     },
 
     paperPreview(text) {
@@ -370,11 +573,11 @@ Vue.createApp({
           .findIndex((item) => item.name === participant.name);
         const compact = window.innerWidth <= 720;
         return {
-          '--seat-x': `${this.stageWidth * ((compact ? .22 : .31) + Math.max(0, outIndex) * .055)}px`,
-          '--seat-y': `${-this.stageHeight * (compact ? .34 : .07)}px`,
-          '--seat-scale': .68,
-          '--seat-width': '112px',
-          '--seat-z': 6 + outIndex,
+          '--seat-x': `${this.stageWidth * (-.36 + Math.max(0, outIndex) * .105)}px`,
+          '--seat-y': `${-this.stageHeight * (compact ? .34 : .39)}px`,
+          '--seat-scale': .58,
+          '--seat-width': '100px',
+          '--seat-z': 72 + outIndex,
           '--seat-order': outIndex,
         };
       }
@@ -508,7 +711,7 @@ Vue.createApp({
 
     showTranscriptPanel() {
       this.showTranscript = true;
-      this.$nextTick(() => this.scrollToTranscript());
+      this.goPage('record');
     },
 
     scrollToTranscript() {
@@ -1051,6 +1254,11 @@ Vue.createApp({
       this.showModelModal = true;
     },
 
+    editModelInline(model = null) {
+      this.openModelModal(model);
+      this.showModelModal = false;
+    },
+
     closeModelModal() {
       if (this.savingModel) return;
       this.showModelModal = false;
@@ -1239,6 +1447,7 @@ Vue.createApp({
       }
       this.hint = '';
       this.resetArena();
+      this.currentPage = 'venue';
       this.running = true;
       this.status = 'running';
       this.statusText = '比赛中';
@@ -1643,6 +1852,7 @@ Vue.createApp({
         if (!res.ok || !data.run) return;
         if (data.run.status !== 'running') return;
         this.resetArena();
+        this.currentPage = 'venue';
         this.proposition = data.run.proposition || this.proposition;
         this.running = true;
         this.status = 'running';
@@ -1727,6 +1937,7 @@ Vue.createApp({
         this.stageElapsed = Number(transcript.duration || 0);
         this.pushActivity('done', `载入历史提问：${transcript.proposition || id}`, transcript.winner || '');
         this.hint = '';
+        this.currentPage = 'record';
         this.scrollDown(true);
         this.$nextTick(() => {
           this.setupStage();

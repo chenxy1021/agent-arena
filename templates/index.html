@@ -22,6 +22,21 @@
         <p>多智能体辩论赛</p>
       </div>
     </div>
+    <nav class="main-nav" aria-label="主导航">
+      <button v-for="item in [
+        ['register', '登记'],
+        ['venue', '会场'],
+        ['record', '记录'],
+        ['archive', '档案'],
+        ['models', '模型']
+      ]" :key="item[0]" type="button"
+        :class="{ active: currentPage === item[0] }"
+        @click="goPage(item[0])">
+        {{ item[1] }}
+        <i v-if="item[0] === 'venue' && running" class="nav-live-dot"></i>
+        <i v-if="item[0] === 'record' && tablePapers.length" class="nav-count">{{ tablePapers.length }}</i>
+      </button>
+    </nav>
     <div class="report-state">
       <button type="button" class="sound-toggle" :class="{ on: soundOn }"
         :aria-pressed="soundOn" @click="toggleSound"
@@ -37,20 +52,21 @@
     </div>
   </header>
 
-  <main class="page">
-    <section v-if="!participants.length && !rounds.length && !running" class="registration">
-      <div class="registration-intro">
-        <span class="section-kicker">ARENA REGISTRATION · 赛事登记</span>
+  <main class="page app-page">
+    <section v-if="currentPage === 'register'" class="page-register registration">
+      <header class="page-intro">
+        <span class="section-kicker">REGISTRATION · 赛事登记</span>
+        <h1>让几台机器，把问题争论清楚。</h1>
         <label for="proposition">今天，让它们争论什么？</label>
         <textarea id="proposition" class="proposition-input" v-model="proposition" rows="2"
           placeholder="写下今天要辩的命题"
           @keydown.meta.enter="startMatch" @keydown.ctrl.enter="startMatch"></textarea>
-      </div>
+      </header>
 
       <div class="registration-grid">
         <section class="form-section rules-section">
           <div class="section-heading">
-            <h2>出局规则</h2>
+            <h2>比赛规则</h2>
             <span>二选一</span>
           </div>
           <div class="rule-cards">
@@ -80,31 +96,29 @@
 
         <section class="form-section models-section">
           <div class="section-heading">
-            <h2>参赛登记</h2>
+            <h2>模型名册</h2>
             <button type="button" class="text-action" @click="openModelModal">＋ 登记模型</button>
           </div>
-          <ul class="model-list">
+          <ul class="model-list roster-list">
             <li v-if="modelsLoading" class="empty-row">正在读取登记册…</li>
             <li v-for="m in models" :key="m.id" :class="{ selected: m.checked }"
               @click="toggleModel(m, $event)">
               <input type="checkbox" :checked="m.checked"
                 @click.stop @change="m.checked = $event.target.checked">
-              <span class="model-ink"
-                :style="{ '--team-color': agentColor(m.name), background: agentColor(m.name) }"></span>
+              <robot-avatar :name="m.name" :spec="robotSpec(m.name)"
+                :color="agentColor(m.name)" :size="40"></robot-avatar>
               <span class="model-copy">
                 <b>{{ m.name }}</b>
                 <small>{{ m.model }}</small>
               </span>
               <span class="row-actions">
-                <button type="button" class="row-action" title="修改模型配置"
-                  @click.stop="openModelModal(m)">修改</button>
-                <button type="button" class="row-action row-delete" title="删除模型"
-                  @click.stop="deleteModel(m)">删除</button>
+                <button type="button" class="row-action" @click.stop="openModelModal(m)">修改</button>
+                <button type="button" class="row-action row-delete" @click.stop="deleteModel(m)">删除</button>
               </span>
             </li>
           </ul>
           <p v-if="!modelsLoading && !models.length" class="empty-copy">
-            还没有登记参赛模型。先写辩题，再登记至少两个模型，赛事会按轮次记录每一次发言、投票和出局。
+            还没有登记参赛模型。先登记至少两个模型，再写下命题开始比赛。
           </p>
         </section>
       </div>
@@ -117,419 +131,388 @@
       </div>
     </section>
 
-    <section v-else class="match-view"
+    <section v-if="currentPage === 'venue'" class="venue-page match-view"
       :class="{
         'is-done': !!winnerName,
         'is-replaying': replaying,
-        'is-tiebreak': activeStage.includes('加赛'),
         'is-voting': votingMode,
         'is-waiting': waitingMode
       }"
       :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status"
       @pointermove="moveStage">
-      <header class="show-head">
-        <div class="show-topline">
-          <span class="section-kicker">{{ replaying ? 'ARCHIVE · 赛事存档' : 'LIVE SHOW · 正在记录' }}</span>
-          <button type="button" class="text-action" :disabled="running" @click="newMatch">
-            {{ running ? '比赛进行中' : '＋ 重新登记一场' }}
-          </button>
-        </div>
-
-        <div class="show-main">
-          <div class="show-copy">
-            <h1>{{ proposition || '未命名赛程' }}</h1>
-            <div class="dossier-meta">
-              <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
-              <span><small>限时</small>{{ timeout }} 秒</span>
-              <span><small>参赛</small>{{ participants.length }} 位</span>
-              <span><small>轮次</small>第 {{ currentRound || 0 }} 轮</span>
-            </div>
-          </div>
-
-          <div class="arena-clock">
-            <span class="clock-label">{{ replaying ? 'RECORDED' : running ? 'LIVE' : 'CLOCK' }}</span>
-            <strong><rolling-number :text="elapsedText" /></strong>
-            <div class="clock-speaker">
-              <span>{{ activeAgent || (running ? '等待发言' : '—') }}</span>
-              <time>{{ stageElapsedText }}</time>
-            </div>
+      <header class="venue-head">
+        <div>
+          <span class="section-kicker">LIVE FLOOR · 会场</span>
+          <h1>{{ proposition || '未命名赛程' }}</h1>
+          <div class="dossier-meta">
+            <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
+            <span><small>限时</small>{{ timeout }} 秒</span>
+            <span><small>在场</small>{{ participants.length - outCount }} 位</span>
+            <span><small>轮次</small>第 {{ currentRound || 0 }} 轮</span>
           </div>
         </div>
-
-        <div class="stage-progress" aria-hidden="true">
-          <i :style="{ width: Math.max(0, Math.min(100, stageProgress)) + '%' }"></i>
+        <div class="arena-clock">
+          <span class="clock-label">{{ replaying ? 'RECORDED' : running ? 'LIVE' : 'CLOCK' }}</span>
+          <strong><rolling-number :text="elapsedText"></rolling-number></strong>
+          <div class="clock-speaker">
+            <span>{{ activeAgent || (running ? '等待发言' : '—') }}</span>
+            <time>{{ stageElapsedText }}</time>
+          </div>
         </div>
       </header>
 
-      <section ref="stage" class="table-stage" :class="[
-        eventFx ? 'fx-' + eventFx : '',
-        {
-          'is-intro': tableIntro,
-          'is-overview': tableFocused,
-          'is-done': !!winnerName,
-          'is-voting': votingMode,
-          'is-waiting': waitingMode
-        }
-      ]" :style="stageTiltStyle" aria-label="多智能体圆桌会议">
-        <div class="table-blackout" aria-hidden="true"></div>
-        <div class="table-stage-head">
-          <span>ROUND {{ roundNo(currentRound || 1) }}</span>
-          <strong>{{ liveLabel }}</strong>
-          <i></i>
-        </div>
-
-        <svg class="table-rim-light" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
-          <defs>
-            <linearGradient id="rim-light-gradient" x1="0" x2="1">
-              <stop offset="0" stop-color="#ff2e63" stop-opacity="0"/>
-              <stop offset=".5" stop-color="#fff4df"/>
-              <stop offset="1" stop-color="#ff2e63" stop-opacity="0"/>
-            </linearGradient>
-          </defs>
-          <ellipse class="rim-guide" cx="500" cy="310" rx="420" ry="155" pathLength="1"/>
-          <ellipse class="rim-spot" cx="500" cy="310" rx="420" ry="155"
-            pathLength="1" :style="rimSpotStyle"/>
-        </svg>
-
-        <div class="round-table">
-          <div class="table-edge"></div>
-          <div class="table-surface">
-            <span class="table-proposition">{{ proposition }}</span>
-            <div class="table-paper-field">
-              <button v-for="(paper, paperIndex) in tablePapers" :key="paper.key"
-                type="button" class="table-record-paper"
-                :class="{ landing: settledKey === paper.key, out: participantState(paper.agent) === 'out' }"
-                :style="paperStyle(paper, paperIndex)"
-                @click="openPaper(paper)">
-                <span class="record-color" :style="{ background: agentColor(paper.agent) }"></span>
-                <b>{{ paper.agent }}</b>
-                <small>{{ paper.preview }}</small>
-              </button>
-            </div>
-            <div v-if="votingMode || tableVoteTotal" class="table-vote-ring">
-              <svg viewBox="0 0 200 200" aria-label="环形票数刻度">
-                <circle class="vote-ring-base" cx="100" cy="100" r="76"/>
-                <circle v-for="(p, voteIndex) in participants" :key="`arc-${p.name}`"
-                  class="vote-ring-arc" cx="100" cy="100" r="76"
-                  :stroke="agentColor(p.name)" :style="voteArcStyle(p.name, voteIndex)"/>
-              </svg>
-              <span>{{ tableVoteTotal }}<small>VOTES</small></span>
-            </div>
-            <div v-if="winnerName" class="table-winner-mark">
-              <small>FINAL DECISION</small>
-              <b>{{ winnerName }}</b>
-            </div>
-          </div>
-        </div>
-
-        <div class="table-seats">
-          <article v-for="p in participants" :key="`seat-${p.name}`" class="table-seat"
-            :class="{
-              active: running && p.name === activeAgent,
-              thinking: p.state === 'thinking',
-              out: p.state === 'out',
-              winner: winnerName === p.name,
-              hit: hitAgent === p.name
-            }"
-            :style="seatStyle(p)">
-            <div class="seat-card" :style="{ '--team-color': agentColor(p.name) }">
-              <span class="seat-color"></span>
-              <b>{{ displayName(p.name) }}<em>{{ p.label }}</em></b>
-              <small><rolling-number :text="String(scoreFor(p.name))" /> 票</small>
-              <span class="seat-status">
-                {{ p.state === 'out' ? '出局' : winnerName === p.name ? '胜者' : p.name === activeAgent ? activeStage : '在场' }}
-              </span>
-              <span class="seat-back">出局</span>
-            </div>
-          </article>
-        </div>
-
-        <transition name="paper-drop">
-          <article v-if="currentPaper" class="speaker-paper"
-            :class="{ final: currentPaper.final, waiting: !currentPaper.text }"
-            :style="{ '--team-color': agentColor(currentPaper.agent) }">
-            <header>
-              <span>{{ currentPaper.final ? 'FINAL' : '第 ' + currentPaper.round + ' 轮' }}</span>
-              <b>{{ currentPaper.agent }}</b>
-              <span>{{ currentPaper.role }}</span>
-              <time>{{ stageElapsedText }}</time>
-            </header>
-            <div class="speaker-paper-body">
-              <template v-if="currentPaper.text">
-                <div v-for="(block, blockIndex) in paperBlocks(currentPaper.text)" :key="blockIndex"
-                  class="paper-block" :class="{ gap: blockIndex > 0 }">
-                  <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
-                </div>
-              </template>
-              <p v-else class="paper-waiting">
-                {{ currentPaper.agent }} 正在整理{{ currentPaper.role }}<span>…</span>
-              </p>
-              <i v-if="currentPaper.text" class="paper-caret" aria-hidden="true"></i>
-            </div>
-            <footer>
-              <span>剩余 {{ remainingTimeText }}</span>
-              <div class="paper-ticks" aria-hidden="true">
-                <i v-for="tick in paperTickCount" :key="tick"
-                  :class="{ used: stageElapsed >= tick * 30 }"></i>
-              </div>
-            </footer>
-          </article>
-        </transition>
-
-        <aside v-if="recentVoteRows.length" class="vote-receipt">
-          <span>RECENT BALLOTS</span>
-          <p v-for="row in recentVoteRows" :key="`${row.stage}-${row.voter}`">
-            <b>{{ row.voter }}</b>
-            <i>→</i>
-            <strong>{{ row.target }}</strong>
-            <small>{{ row.reason || row.error || '未说明理由' }}</small>
-          </p>
-        </aside>
-
-        <div class="table-actions">
-          <button type="button" @click="toggleTableOverview">
-            {{ tableFocused ? '恢复视角' : '俯视全场' }}
-          </button>
-          <button type="button" @click="showTranscriptPanel">查阅记录</button>
-        </div>
-
-        <svg class="table-vote-chips" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
-          <g v-for="chip in voteChips" :key="chip.id">
-            <circle r="7" :fill="chip.color">
-              <animateMotion :path="voteChipPath(chip)" dur="0.6s" fill="freeze"/>
-            </circle>
-          </g>
-        </svg>
-      </section>
-
-      <div class="match-statusline">
+      <div class="venue-compact-bar">
+        <robot-avatar v-if="activeAgent" :name="activeAgent" :spec="robotSpec(activeAgent)"
+          :color="agentColor(activeAgent)" :state="robotState(activeAgent)" :size="32"></robot-avatar>
         <div>
-          <span class="live-index">{{ replaying ? '回放' : '实时' }}</span>
-          <strong>{{ liveLabel }}</strong>
+          <b>{{ activeAgent || '等待下一位发言' }}</b>
+          <small>第 {{ currentRound || 0 }} 轮 · 在场 {{ participants.length - outCount }} 位</small>
         </div>
-        <div class="status-time">
-          <span v-if="winnerName">胜者 {{ winnerName }}</span>
-          <span v-else>{{ participants.length }} 位参赛 · {{ outCount }} 位出局</span>
-        </div>
+        <span>{{ liveLabel }}</span>
+        <button type="button" @click="goPage('record')">记录</button>
       </div>
 
-      <div ref="stream" class="stream table-transcript" :class="{ open: showTranscript }">
-        <div class="transcript-toolbar">
-          <span>会议记录 · 全文</span>
-          <button type="button" @click="showTranscript = false">收起</button>
+      <div class="venue-layout">
+        <div class="venue-table-column">
+          <section ref="stage" class="table-stage venue-stage" :class="[
+            eventFx ? 'fx-' + eventFx : '',
+            {
+              'is-intro': tableIntro,
+              'is-done': !!winnerName,
+              'is-voting': votingMode,
+              'is-waiting': waitingMode
+            }
+          ]" :style="stageTiltStyle" aria-label="多智能体圆桌会场">
+            <div class="table-blackout" aria-hidden="true"></div>
+            <svg class="table-rim-light" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="rim-light-gradient" x1="0" x2="1">
+                  <stop offset="0" stop-color="#ff2e63" stop-opacity="0"/>
+                  <stop offset=".5" stop-color="#fff4df"/>
+                  <stop offset="1" stop-color="#ff2e63" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <ellipse class="rim-guide" cx="500" cy="310" rx="420" ry="155" pathLength="1"/>
+              <ellipse class="rim-spot" cx="500" cy="310" rx="420" ry="155"
+                pathLength="1" :style="rimSpotStyle"/>
+            </svg>
+
+            <div class="round-table">
+              <div class="table-edge"></div>
+              <div class="table-surface">
+                <div class="table-graphic-center" aria-hidden="true">
+                  <i></i><i></i>
+                </div>
+                <div v-if="votingMode || tableVoteTotal" class="table-vote-ring">
+                  <svg viewBox="0 0 200 200" aria-label="环形票数刻度">
+                    <circle class="vote-ring-base" cx="100" cy="100" r="76"/>
+                    <circle v-for="(p, voteIndex) in participants" :key="`arc-${p.name}`"
+                      class="vote-ring-arc" cx="100" cy="100" r="76"
+                      :stroke="agentColor(p.name)" :style="voteArcStyle(p.name, voteIndex)"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            <div class="table-seats robot-seats">
+              <article v-for="p in participants" :key="`seat-${p.name}`" class="table-seat"
+                :class="{
+                  active: running && p.name === activeAgent,
+                  thinking: p.state === 'thinking',
+                  out: p.state === 'out',
+                  winner: winnerName === p.name,
+                  hit: hitAgent === p.name
+                }" :style="seatStyle(p)">
+                <div class="seat-robot-unit" :style="{ '--team-color': agentColor(p.name) }">
+                  <robot-avatar :name="p.name" :spec="robotSpec(p.name)"
+                    :color="agentColor(p.name)" :state="robotState(p.name)" :size="72"></robot-avatar>
+                  <b>{{ displayName(p.name) }}</b>
+                  <small>{{ p.label }}</small>
+                  <span>{{ scoreFor(p.name) }} 票</span>
+                </div>
+              </article>
+            </div>
+
+            <svg class="table-vote-chips" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
+              <g v-for="chip in voteChips" :key="chip.id">
+                <circle r="7" :fill="chip.color">
+                  <animateMotion :path="voteChipPath(chip)" dur="0.6s" fill="freeze"/>
+                </circle>
+              </g>
+            </svg>
+          </section>
+
+          <div class="venue-footline">
+            <span>{{ liveLabel }}</span>
+            <button type="button" @click="goPage('record')">查看完整记录 →</button>
+          </div>
         </div>
-        <div v-if="!rounds.length" class="match-pending">
-          <div class="pending-mark"></div>
-          <p>{{ running ? '舞台已经亮起，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
-        </div>
 
-        <section v-for="round in roundsNewestFirst" :key="round.no" class="round-paper"
-          :class="{ current: round.no === currentRound }">
-          <aside class="round-index">
-            <span><rolling-number :text="roundNo(round.no)" /></span>
-            <small>ROUND</small>
-          </aside>
-
-          <div class="round-sheet">
-            <header class="round-head">
-              <div>
-                <span class="round-kicker">第 {{ round.no }} 轮</span>
-                <strong>发言与裁决</strong>
-              </div>
-              <div class="round-order">在场 {{ round.alive }} 人 · {{ round.order.join(' → ') }}</div>
-            </header>
-
-            <div class="round-columns">
-              <div class="speech-column">
-                <div v-if="round.no === currentRound && running && modelStreams.length"
-                  class="live-stream-stack">
-                  <article v-for="stream in modelStreams" :key="`stream-${stream.agent}`"
-                    class="stream-card" :class="{ active: stream.agent === activeAgent }"
-                    :style="{ '--team-color': agentColor(stream.agent) }">
-                    <i class="stream-progress"
-                      :style="{ width: streamProgress(stream) + '%' }"></i>
-                    <header>
-                      <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
-                      <span>{{ stream.role }}</span>
-                      <span class="stream-count">{{ streamChars(stream) }} 字</span>
-                      <i v-if="stream.agent === activeAgent" class="stream-pulse"></i>
-                    </header>
-                    <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}<i
-                      v-if="stream.agent === activeAgent" class="stream-caret" aria-hidden="true"></i></pre>
-                  </article>
-                </div>
-
-                <article v-for="(speech, idx) in round.speeches" :key="`s-${idx}`"
-                  class="speech" :class="{
-                    error: !!speech.error,
-                    settled: settledKey === `${round.no}-${idx}`
-                  }"
-                  :style="{ '--team-color': agentColor(speech.agent) }">
-                  <header class="speech-head">
-                    <span class="speech-ticket">
-                      {{ speech.agent }}<small v-if="agentModel(speech.agent)"> · {{ agentModel(speech.agent) }}</small>
-                    </span>
-                    <span class="speech-role">{{ speech.role }}</span>
-                    <time v-if="!speech.error">{{ Number(speech.elapsed || 0).toFixed(1) }}s</time>
-                  </header>
-                  <div v-if="speech.error" class="speech-error">未完成：{{ speech.error }}</div>
-                  <div v-else class="speech-body">
-                    <div v-for="(block, bi) in speechBlocks(speech.text)" :key="bi"
-                      class="speech-block" :class="{ 'speech-gap': bi > 0 }"
-                      :style="{ '--block-index': bi }">
-                      <span v-if="block.kind !== 'plain'" class="print-tag"
-                        :class="block.kind === 'view' ? 'tag-view' : 'tag-critique'">
-                        {{ block.kind === 'view' ? '【观点】' : '【点评】' }}
-                      </span>{{ block.text }}
-                    </div>
-                  </div>
-                </article>
-
-                <div v-for="item in round.thinking" :key="`t-${item.agent}-${item.role}`"
-                  v-show="!modelStreams.some((stream) => stream.agent === item.agent)"
-                  class="speech pending-speech" :style="{ '--team-color': agentColor(item.agent) }">
-                  <header class="speech-head">
-                    <span class="speech-ticket">
-                      {{ item.agent }}<small v-if="agentModel(item.agent)"> · {{ agentModel(item.agent) }}</small>
-                    </span>
-                    <span class="speech-role">{{ item.role }}中</span>
-                    <span class="writing-dots"><i></i><i></i><i></i></span>
-                  </header>
-                </div>
-
-                <div v-for="(exit, xi) in round.exits" :key="`x-${xi}`" class="technical-exit">
-                  {{ exit.agent }} 未在限时内完成，本轮记为技术退赛：{{ exit.error }}
-                </div>
-              </div>
-
-              <aside class="decision-column">
-                <div class="ledger-title">投票与裁决</div>
-
-                <div v-if="round.tiebreakSteps?.length" class="tiebreak-trail">
-                  <div v-for="step in round.tiebreakSteps" :key="`tb-${step.attempt}`"
-                    class="tiebreak-step" :class="{ resolved: step.status === 'decided' }">
-                    <b>第 {{ step.attempt }} 次加赛</b>
-                    <span>{{ step.agents?.join('、') }}</span>
-                    <p v-if="step.removed?.length">移出投票人：{{ step.removed.join('、') }}</p>
-                    <p v-else>同票者重新发言后，由 {{ step.voters }} 位投票人重投。</p>
-                  </div>
-                </div>
-
-                <div v-for="group in voteStageGroups(round.votes)" :key="group.stage"
-                  class="vote-stage">
-                  <div class="vote-stage-head">
-                    <b>{{ group.label }}</b>
-                    <span>{{ group.rows.length }} 票</span>
-                  </div>
-                  <div v-for="entry in voteBars(group.counts)" :key="`${group.stage}-${entry.name}`"
-                    class="vote-tally-row" :class="{ lead: entry.lead }">
-                    <span class="vote-name">{{ entry.name }}</span>
-                    <tally-marks :count="entry.count"
-                      :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
-                  </div>
-                  <div v-if="!voteBars(group.counts).length" class="ledger-empty">无有效票</div>
-
-                  <div class="vote-detail-head">逐票记录</div>
-                  <div v-for="(row, vi) in group.rows" :key="`v-${group.stage}-${vi}`" class="vote-record">
-                    <div class="vote-record-main">
-                      <span>
-                        {{ row.voter }}
-                        <small v-if="row.is_judge">评委</small>
-                        <small v-if="row.stage && row.stage !== 'main'">{{ voteStageLabel(row.stage) }}</small>
-                      </span>
-                      <b>投给 {{ row.target || '未投' }}</b>
-                    </div>
-                    <p>{{ row.reason || row.error || '未说明理由' }}</p>
-                  </div>
-                </div>
-
-                <div v-if="liveVotingRows(round).length" class="vote-stage live-vote-stage">
-                  <div class="vote-stage-head">
-                    <b>{{ currentVoteStage(round) }}</b>
-                    <span>收票中</span>
-                  </div>
-                  <div v-for="row in liveVotingRows(round)" :key="`live-${row.voter}`"
-                    class="live-vote-row">
-                    <span>{{ row.voter }}<small v-if="row.is_judge">评委</small></span>
-                    <b v-if="row.status === 'done'">投给 {{ row.target }}</b>
-                    <b v-else-if="row.status === 'error'" class="vote-error">投票失败</b>
-                    <b v-else>正在判断…</b>
-                  </div>
-                </div>
-
-                <div v-if="round.no === currentRound && running" class="trace-block">
-                  <div class="trace-head">执行轨迹</div>
-                  <ol v-if="activity.length" class="trace-list">
-                    <li v-for="item in activity.slice(0, 10)" :key="item.id">
-                      <time>{{ item.clock }}</time>
-                      <span>{{ activityKind(item.kind) }}</span>
-                      <p>{{ item.text }}</p>
-                    </li>
-                  </ol>
-                  <div v-else class="ledger-empty">等待赛务事件。</div>
-                </div>
-
-                <div v-if="!round.votes && !round.tiebreakSteps?.length && !(round.no === currentRound && running)"
-                  class="ledger-empty">
-                  {{ round.no === 1 ? '首轮只发表观点，不进行投票。' : '本轮没有可展示的计票记录。' }}
-                </div>
-              </aside>
+        <aside v-if="currentPaper" class="live-speech-board"
+          :class="{ final: currentPaper.final, waiting: !currentPaper.text }"
+          :style="{ '--team-color': agentColor(currentPaper.agent) }">
+          <header>
+            <robot-avatar :name="currentPaper.agent" :spec="robotSpec(currentPaper.agent)"
+              :color="agentColor(currentPaper.agent)" :state="robotState(currentPaper.agent)" :size="48"></robot-avatar>
+            <div>
+              <b>{{ currentPaper.agent }}</b>
+              <small>{{ agentModel(currentPaper.agent) || currentPaper.role }}</small>
             </div>
-
-            <div v-if="round.eliminated" class="elimination-line">
-              <span class="elimination-stamp">出局</span>
-              <strong>{{ round.eliminated.agent }}</strong>
-              <span>{{ round.eliminated.votes }} 票</span>
-              <p>{{ round.eliminated.tiebreak || '转为评委席，仍可参与后续投票' }}</p>
+            <span class="board-role">{{ currentPaper.role }}</span>
+            <div class="board-timer" :style="{ '--timer-progress': stageProgress + '%' }">
+              <span>{{ remainingTimeText }}</span>
             </div>
-          </div>
-        </section>
-
-        <article v-if="final" class="winner-sheet">
-          <div class="winner-glow" aria-hidden="true"></div>
-          <div class="winner-seal">
-            <span>胜</span>
-            <small>WINNER</small>
-          </div>
-          <div class="winner-copy">
-            <span class="section-kicker">最终裁决</span>
-            <h2>{{ final.agent }}</h2>
-            <div class="final-text">
-              <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
-                :class="{ 'speech-gap': i > 0 }">
-                <span v-if="block.kind !== 'plain'" class="final-label">{{ block.label }}</span>{{ block.text }}
+          </header>
+          <div class="live-board-body">
+            <template v-if="currentPaper.text">
+              <div v-for="(block, blockIndex) in paperBlocks(currentPaper.text)" :key="blockIndex"
+                class="paper-block" :class="{ gap: blockIndex > 0 }">
+                <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
               </div>
-            </div>
+              <i class="paper-caret" aria-hidden="true"></i>
+            </template>
+            <p v-else class="paper-waiting">
+              {{ currentPaper.agent }} 正在整理{{ currentPaper.role }}<span>…</span>
+            </p>
           </div>
-        </article>
+          <footer>
+            <span>第 {{ currentPaper.round === 'FINAL' ? '最终' : currentPaper.round + ' 轮' }}</span>
+            <div class="paper-ticks" aria-hidden="true">
+              <i v-for="tick in paperTickCount" :key="tick"
+                :class="{ used: stageElapsed >= tick * 30 }"></i>
+            </div>
+          </footer>
+        </aside>
+
+        <aside v-else class="live-speech-board is-empty">
+          <div class="board-empty-mark">···</div>
+          <h2>等待下一段发言</h2>
+          <p>圆桌上的灯会沿桌沿移动到下一位机器人。</p>
+        </aside>
       </div>
     </section>
 
-    <section class="archive-section">
-      <div class="section-heading archive-heading">
+    <section v-if="currentPage === 'record'" class="record-page">
+      <header class="record-page-head">
+        <div>
+          <span class="section-kicker">PROCEEDINGS · 会议记录</span>
+          <h1>{{ proposition || '比赛记录' }}</h1>
+        </div>
+        <div class="record-filters">
+          <span>按人筛选</span>
+          <button type="button" :class="{ active: !recordAgentFilter }" @click="recordAgentFilter = ''">全部</button>
+          <button v-for="name in recordAgents" :key="`filter-${name}`" type="button"
+            :class="{ active: recordAgentFilter === name }" @click="selectRecordAgent(name)">
+            {{ name }}
+          </button>
+        </div>
+      </header>
+
+      <div class="record-layout">
+        <aside class="record-timeline">
+          <span>ROUNDS</span>
+          <button type="button" :class="{ active: !recordRoundFilter }" @click="recordRoundFilter = 0">
+            全部轮次
+          </button>
+          <button v-for="round in roundsNewestFirst" :key="`timeline-${round.no}`" type="button"
+            :class="{ active: recordRoundFilter === round.no }" @click="selectRecordRound(round.no)">
+            <b>{{ roundNo(round.no) }}</b>
+            <span>在场 {{ round.alive }} 人</span>
+            <small v-if="round.eliminated">出局 {{ round.eliminated.agent }}</small>
+          </button>
+        </aside>
+
+        <div class="record-main">
+          <div v-if="!recordVisibleRounds.length" class="record-empty">
+            还没有可阅读的发言记录。
+          </div>
+
+          <section v-for="round in recordVisibleRounds" :key="`record-${round.no}`"
+            :data-record-round="round.no" class="record-round">
+            <header>
+              <span>ROUND {{ roundNo(round.no) }}</span>
+              <h2>第 {{ round.no }} 轮</h2>
+              <p>在场 {{ round.alive }} 人 · {{ round.order.join(' → ') }}</p>
+            </header>
+
+            <article v-for="(speech, idx) in filteredSpeeches(round)" :key="`rs-${round.no}-${idx}`"
+              class="record-speech" :style="{ '--team-color': agentColor(speech.agent) }">
+              <header>
+                <robot-avatar :name="speech.agent" :spec="robotSpec(speech.agent)"
+                  :color="agentColor(speech.agent)" :size="40"></robot-avatar>
+                <div>
+                  <b>{{ speech.agent }}</b>
+                  <small>{{ agentModel(speech.agent) }} · {{ speech.role }}</small>
+                </div>
+                <time>{{ Number(speech.elapsed || 0).toFixed(1) }}s</time>
+              </header>
+              <div v-if="speech.error" class="record-error">未完成：{{ speech.error }}</div>
+              <div v-else class="record-speech-body">
+                <div v-for="(block, bi) in speechBlocks(speech.text)" :key="bi"
+                  class="record-block" :class="{ gap: bi > 0 }">
+                  <mark v-if="block.kind !== 'plain'" :class="'mark-' + block.kind">
+                    {{ block.kind === 'view' ? '【观点】' : '【点评】' }}
+                  </mark>{{ block.text }}
+                </div>
+              </div>
+            </article>
+
+            <div v-if="round.eliminated" class="record-elimination">
+              <span>出局</span>
+              <b>{{ round.eliminated.agent }}</b>
+              <p>{{ round.eliminated.votes }} 票 · {{ round.eliminated.tiebreak || '本轮直接出局' }}</p>
+            </div>
+          </section>
+
+          <article v-if="final && !recordAgentFilter" class="record-final">
+            <span>FINAL DECISION</span>
+            <h2>{{ final.agent }}</h2>
+            <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
+              class="record-block" :class="{ gap: i > 0 }">
+              <mark v-if="block.kind !== 'plain'">{{ block.label }}</mark>{{ block.text }}
+            </div>
+          </article>
+        </div>
+
+        <aside v-if="recordActiveRound" class="record-votes">
+          <span class="record-votes-kicker">第 {{ recordActiveRound.no }} 轮 · 投票与裁决</span>
+
+          <div v-if="recordActiveRound.tiebreakSteps?.length" class="record-tiebreak">
+            <div v-for="step in recordActiveRound.tiebreakSteps" :key="`rt-${step.attempt}`">
+              <b>第 {{ step.attempt }} 次加赛</b>
+              <p>{{ step.agents?.join('、') }} · {{ step.status === 'decided' ? '已决出' : '仍平票' }}</p>
+              <small v-if="step.removed?.length">移出投票人：{{ step.removed.join('、') }}</small>
+            </div>
+          </div>
+
+          <div v-for="group in voteStageGroups(recordActiveRound.votes)" :key="`rg-${group.stage}`"
+            class="record-vote-group">
+            <h3>{{ group.label }} <small>{{ group.rows.length }} 票</small></h3>
+            <div v-for="entry in voteBars(group.counts)" :key="`rb-${group.stage}-${entry.name}`"
+              class="record-vote-tally">
+              <span>{{ entry.name }}</span>
+              <tally-marks :count="entry.count"
+                :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
+            </div>
+            <div v-for="(row, vi) in group.rows" :key="`rr-${group.stage}-${vi}`" class="record-ballot">
+              <p><b>{{ row.voter }}</b><i>→</i><strong>{{ row.target || '未投' }}</strong></p>
+              <small>{{ row.reason || row.error || '未说明理由' }}</small>
+            </div>
+          </div>
+
+          <div v-if="!recordActiveRound.votes" class="record-empty-votes">
+            {{ recordActiveRound.no === 1 ? '首轮只发言，不投票。' : '本轮尚无投票记录。' }}
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section v-if="currentPage === 'archive'" class="archive-page">
+      <header class="archive-page-head">
         <div>
           <span class="section-kicker">ARCHIVE · 赛事档案</span>
-          <h2>历史提问</h2>
+          <h1>历史提问</h1>
+          <p>每一场争论都保留完整发言、投票与裁决。</p>
         </div>
-        <button type="button" class="text-action" :disabled="historyLoading" @click="loadHistory">
+        <button type="button" class="secondary-button" :disabled="historyLoading" @click="loadHistory">
           {{ historyLoading ? '读取中…' : '刷新档案' }}
         </button>
-      </div>
-      <ul class="archive-list">
-        <li v-if="historyLoading" class="empty-row">正在读取档案…</li>
-        <li v-else-if="!history.length" class="empty-row">还没有赛事记录。</li>
-        <li v-for="item in history" :key="item.id"
-          :class="{ current: item.id === viewingHistoryId }"
-          @click="loadHistoryRun(item.id)">
-          <div>
-            <b>{{ item.proposition }}</b>
-            <span>{{ historyStatus(item) }} · {{ item.participants }} 人
-              <template v-if="item.winner"> · 胜者 {{ item.winner }}</template>
-            </span>
+      </header>
+
+      <div class="archive-grid">
+        <article v-for="item in history" :key="item.id" class="archive-card"
+          :class="{ current: item.id === viewingHistoryId }" @click="loadHistoryRun(item.id)">
+          <header>
+            <span>{{ historyStatus(item) }}</span>
+            <time>{{ item.started_at ? item.started_at.slice(0, 16) : '' }}</time>
+          </header>
+          <h2>{{ item.proposition }}</h2>
+          <div class="archive-robots">
+            <robot-avatar v-for="robot in archiveRobots(item)" :key="robot.name"
+              :name="robot.name" :spec="robotSpec(robot.name)" :color="agentColor(robot.name)"
+              :state="robot.winner ? 'winner' : robot.out ? 'out' : 'idle'" :size="32"></robot-avatar>
           </div>
-          <time>{{ item.started_at ? item.started_at.slice(5, 16) : '' }}</time>
-        </li>
-      </ul>
+          <footer>
+            <span>{{ item.participants }} 位参赛</span>
+            <span v-if="item.winner">胜者 {{ item.winner }}</span>
+            <span v-else>无胜者</span>
+          </footer>
+        </article>
+        <div v-if="!historyLoading && !history.length" class="archive-empty">还没有赛事记录。</div>
+      </div>
+    </section>
+
+    <section v-if="currentPage === 'models'" class="models-page">
+      <header class="models-page-head">
+        <div>
+          <span class="section-kicker">MODEL REGISTRY · 模型</span>
+          <h1>登记与管理</h1>
+          <p>机器人形象由模型信息生成，登记后会自动拥有自己的工业卡通形象。</p>
+        </div>
+      </header>
+
+      <div class="model-studio">
+        <form class="studio-form" @submit.prevent="saveModel">
+          <div class="studio-form-head">
+            <h2>{{ editingModelId ? '修改模型' : '登记新模型' }}</h2>
+            <button type="button" class="text-action" @click="editModelInline()">清空表单</button>
+          </div>
+          <label>显示名称
+            <span class="name-input-row">
+              <input v-model.trim="modelForm.name" required maxlength="80" placeholder="例如：GPT-5">
+              <button type="button" class="name-suggest" :disabled="namingModel || savingModel"
+                @click="suggestModelName">{{ namingModel ? '测试中…' : '自动取名' }}</button>
+            </span>
+          </label>
+          <label>Base URL
+            <input v-model.trim="modelForm.base_url" required type="url" placeholder="https://api.openai.com/v1">
+          </label>
+          <label>API Key
+            <input v-model.trim="modelForm.api_key" :required="!editingModelId" type="password"
+              autocomplete="off" :placeholder="editingModelId ? '留空则保留原 Key' : 'sk-...'">
+          </label>
+          <label>模型 ID
+            <input v-model.trim="modelForm.model" required maxlength="200" placeholder="例如：gpt-5">
+          </label>
+          <label>系统提示词（选填）
+            <textarea v-model="modelForm.system_prompt" rows="3" placeholder="给模型的额外角色或回答要求"></textarea>
+          </label>
+          <label>温度（选填）
+            <input v-model="modelForm.temperature" type="number" min="0" max="2" step="0.1" placeholder="例如：0.7">
+          </label>
+          <p class="modal-hint" :class="{ success: hintOk }">{{ hint }}</p>
+          <button type="submit" class="primary-button" :disabled="savingModel || namingModel">
+            {{ savingModel ? '保存中…' : (editingModelId ? '保存修改' : '登记模型') }}
+          </button>
+        </form>
+
+        <aside class="robot-studio">
+          <span>ROBOT PREVIEW</span>
+          <robot-avatar :name="modelPreviewKey" :spec="robotSpec(modelPreviewKey)"
+            :color="agentColor(modelPreviewKey)" :size="160"></robot-avatar>
+          <b>{{ modelPreviewKey }}</b>
+          <p>换一个不会改变模型配置，只会更换本地机器人外观。</p>
+          <button type="button" class="secondary-button" @click="rerollRobot(modelPreviewKey)">换一个</button>
+        </aside>
+      </div>
+
+      <section class="model-registry">
+        <div class="section-heading">
+          <h2>全部模型</h2>
+          <span>{{ models.length }} 个</span>
+        </div>
+        <article v-for="m in models" :key="`model-${m.id}`" class="model-registry-row">
+          <robot-avatar :name="m.name" :spec="robotSpec(m.name)"
+            :color="agentColor(m.name)" :size="44"></robot-avatar>
+          <div>
+            <b>{{ m.name }}</b>
+            <small>{{ m.model }} · {{ m.base_url }}</small>
+          </div>
+          <label class="model-check"><input v-model="m.checked" type="checkbox"> 参赛</label>
+          <button type="button" class="text-action" @click="editModelInline(m)">修改</button>
+          <button type="button" class="row-action row-delete" @click="deleteModel(m)">删除</button>
+        </article>
+      </section>
     </section>
   </main>
 
