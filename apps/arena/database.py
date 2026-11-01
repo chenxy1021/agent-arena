@@ -9,8 +9,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path(os.environ.get("ARENA_DB", Path.cwd() / "arena.db"))
-RUNS_DIR = Path.cwd() / "runs"
+from config import settings
+
+DB_PATH = Path(os.environ.get("ARENA_DB", settings.DATABASE_PATH))
+RUNS_DIR = settings.RUNS_DIR
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (

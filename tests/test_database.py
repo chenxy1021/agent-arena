@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_arena import database
+from apps.arena import database
 
 
 class HistoryDatabaseTest(unittest.TestCase):

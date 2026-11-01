@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_arena.mock import MockAgent
-from agent_arena.moderator import Arena, ArenaConfig, Speech
+from apps.arena.mock import MockAgent
+from apps.arena.moderator import Arena, ArenaConfig, Speech
 
 
 class DecideTiebreakTest(unittest.TestCase):

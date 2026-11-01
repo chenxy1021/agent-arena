@@ -20,6 +20,9 @@ pip install -r requirements.txt
 # 图形界面
 python arena.py --serve
 
+# 或者直接启动 ASGI 应用
+uvicorn config.asgi:app --reload
+
 # 命令行
 python arena.py "小团队该不该上 Kubernetes"
 ```
@@ -39,6 +42,36 @@ python arena.py "团队应该优先追求速度还是质量" --mock 4
 - 已出局者禁言，但保留评审投票权。
 - 历史提问存入 `arena.db`，旧版 `runs/` 战报会在启动时自动补录。
 - 历史记录可以回放完整的发言、投票和最终结论。
+
+## 目录结构
+
+项目采用类似 Django 的 `config + apps + templates + static` 组织方式：
+
+```text
+.
+├── arena.py                 # 统一入口
+├── config/
+│   ├── settings.py          # 路径与项目配置
+│   ├── urls.py              # 应用组装、路由和静态资源
+│   ├── asgi.py              # uvicorn config.asgi:app
+│   └── server.py            # 本地开发服务器
+├── apps/
+│   └── arena/
+│       ├── api.py           # API 路由
+│       ├── schemas.py       # Pydantic 请求模型
+│       ├── services.py      # 比赛生命周期与后台线程
+│       ├── adapters.py      # CLI 探测与调用
+│       ├── moderator.py     # 赛制核心
+│       ├── database.py      # SQLite 历史
+│       └── ...
+├── templates/
+│   └── index.html           # Vue 页面模板
+├── static/
+│   ├── app.js
+│   ├── style.css
+│   └── vendor/
+└── tests/
+```
 
 ## 平票规则
 
@@ -62,7 +95,7 @@ python arena.py "团队应该优先追求速度还是质量" --mock 4
 
 ```bash
 python -m unittest discover -s tests -v
-node --check agent_arena/web/app.js
+node --check static/app.js
 ```
 
 ## 安全边界

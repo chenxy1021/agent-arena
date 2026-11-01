@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     ui = UI(color=False if args.no_color else None)
 
     if args.serve:
-        from .api import serve
+        from config.server import serve
 
         return serve(port=args.port, open_browser=not args.no_open)
 
