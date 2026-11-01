@@ -29,7 +29,36 @@ const TALLY_STROKES = [
   { x1: 2, y1: 20, x2: 16, y2: 20 },
 ];
 
+const RollingNumber = {
+  props: {
+    text: { type: String, default: '0' },
+  },
+  computed: {
+    chars() {
+      return String(this.text).split('');
+    },
+  },
+  methods: {
+    isDigit(char) {
+      return /\d/.test(char);
+    },
+  },
+  template: `
+    <span class="rolling-number" :aria-label="text">
+      <template v-for="(char, index) in chars" :key="index">
+        <span v-if="isDigit(char)" class="roll-digit">
+          <span class="roll-track" :style="{ transform: 'translateY(-' + (Number(char) * 10) + '%)' }">
+            <i v-for="digit in 10" :key="digit">{{ digit - 1 }}</i>
+          </span>
+        </span>
+        <span v-else class="roll-separator">{{ char }}</span>
+      </template>
+    </span>
+  `,
+};
+
 const TallyMarks = {
+  components: { RollingNumber },
   props: {
     count: { type: Number, default: 0 },
     color: { type: String, default: 'currentColor' },
@@ -56,13 +85,13 @@ const TallyMarks = {
         </svg>
       </span>
       <span v-else class="tally-zero">〇</span>
-      <b>{{ count }}</b>
+      <rolling-number class="tally-number" :text="String(count)" />
     </span>
   `,
 };
 
 Vue.createApp({
-  components: { TallyMarks },
+  components: { RollingNumber, TallyMarks },
 
   data() {
     return {
@@ -112,6 +141,19 @@ Vue.createApp({
       modelOutputEls: {},
       modelStreamSeq: 0,
       timer: null,
+      soundOn: false,
+      votingMode: false,
+      waitingMode: false,
+      eventFx: '',
+      hitAgent: '',
+      leaderFlicker: false,
+      liveVoteCounts: {},
+      decodedNames: {},
+      archiveStamp: '',
+      settledKey: '',
+      pointerX: 0,
+      pointerY: 0,
+      reducedMotion: false,
     };
   },
 
@@ -160,19 +202,38 @@ Vue.createApp({
       if (!this.stageElapsed) return 0;
       return Math.min(100, (this.stageElapsed / Math.max(1, Number(this.timeout))) * 100);
     },
+    stageTiltStyle() {
+      return {
+        '--stage-tilt-x': `${(-this.pointerY * 1.2).toFixed(2)}deg`,
+        '--stage-tilt-y': `${(this.pointerX * 1.2).toFixed(2)}deg`,
+        '--stage-shift-x': `${(this.pointerX * 6).toFixed(2)}px`,
+        '--stage-shift-y': `${(this.pointerY * 4).toFixed(2)}px`,
+      };
+    },
   },
 
   mounted() {
+    this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.soundOn = window.localStorage.getItem('arena-sound') === 'on';
     this.loadModels();
     this.loadHistory();
     this.attachActive();
     window.addEventListener('beforeunload', this.closeStream);
+    window.addEventListener('beforeunload', this.teardownStage);
+    window.addEventListener('resize', this.resizeStage);
+    this.$nextTick(this.setupStage);
+    if (this.soundOn) {
+      window.addEventListener('pointerdown', () => this.enableSound(), { once: true });
+    }
   },
 
   beforeUnmount() {
     this.closeStream();
     this.stopTimer();
+    this.teardownStage();
     window.removeEventListener('beforeunload', this.closeStream);
+    window.removeEventListener('beforeunload', this.teardownStage);
+    window.removeEventListener('resize', this.resizeStage);
   },
 
   methods: {
@@ -188,7 +249,7 @@ Vue.createApp({
     },
 
     scoreFor(name) {
-      return this.scoreByName[name] || 0;
+      return (this.scoreByName[name] || 0) + (this.liveVoteCounts[name] || 0);
     },
 
     beamHeight(name) {
@@ -196,6 +257,10 @@ Vue.createApp({
       const ratio = this.beamMax > 0 ? score / this.beamMax : 0;
       const speakingBoost = name === this.activeAgent ? this.stageProgress * 0.09 : 0;
       return Math.min(100, 9 + ratio * 81 + speakingBoost);
+    },
+
+    beamScale(name) {
+      return Math.max(.09, this.beamHeight(name) / 100);
     },
 
     agentModel(name) {
@@ -261,6 +326,411 @@ Vue.createApp({
     scrollOutput(agent) {
       const element = this.modelOutputEls[agent];
       if (element) element.scrollTop = element.scrollHeight;
+    },
+
+    displayName(name) {
+      return this.decodedNames[name] || name;
+    },
+
+    decodeAgentName(name) {
+      if (!name || this.reducedMotion || this.replaying) return;
+      window.clearInterval(this._nameTimers?.[name]);
+      this._nameTimers ||= {};
+      const glyphs = 'ABCDEF0123456789#$%&*<>/';
+      let step = 0;
+      const total = Math.max(8, Math.min(13, name.length + 5));
+      const timer = window.setInterval(() => {
+        step += 1;
+        const settled = Math.floor((step / total) * name.length);
+        const scrambled = name
+          .split('')
+          .map((char, index) => (
+            index < settled || step >= total
+              ? char
+              : glyphs[Math.floor(Math.random() * glyphs.length)]
+          ))
+          .join('');
+        this.decodedNames = { ...this.decodedNames, [name]: scrambled };
+        if (step >= total) {
+          window.clearInterval(timer);
+          delete this._nameTimers[name];
+          this.decodedNames = { ...this.decodedNames, [name]: name };
+        }
+      }, 30);
+      this._nameTimers[name] = timer;
+    },
+
+    streamChars(stream) {
+      return [...String(stream?.text || '')].length;
+    },
+
+    streamProgress(stream) {
+      return Math.min(96, this.streamChars(stream) / 8);
+    },
+
+    moveStage(event) {
+      if (this.reducedMotion || this.replaying || !this.$refs.stage) return;
+      const rect = this.$refs.stage.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      this.pointerX = Math.max(-.5, Math.min(.5, (event.clientX - rect.left) / rect.width - .5));
+      this.pointerY = Math.max(-.5, Math.min(.5, (event.clientY - rect.top) / rect.height - .5));
+    },
+
+    playFx(name, duration = 900) {
+      window.clearTimeout(this._fxTimer);
+      this.eventFx = '';
+      window.requestAnimationFrame(() => {
+        this.eventFx = name;
+        this._fxTimer = window.setTimeout(() => {
+          if (this.eventFx === name) this.eventFx = '';
+        }, this.reducedMotion ? 1 : duration);
+      });
+    },
+
+    flashHit(name) {
+      if (!name) return;
+      window.clearTimeout(this._hitTimer);
+      this.hitAgent = name;
+      this._hitTimer = window.setTimeout(() => {
+        if (this.hitAgent === name) this.hitAgent = '';
+      }, 320);
+    },
+
+    pulseWaiting() {
+      window.clearTimeout(this._waitingTimer);
+      this.waitingMode = true;
+      this._waitingTimer = window.setTimeout(() => {
+        this.waitingMode = false;
+      }, 2350);
+    },
+
+    enableSound() {
+      if (!this.soundOn) return;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      this._audio ||= new AudioCtx();
+      if (this._audio.state === 'suspended') this._audio.resume();
+      this.startAmbient();
+    },
+
+    toggleSound() {
+      this.soundOn = !this.soundOn;
+      window.localStorage.setItem('arena-sound', this.soundOn ? 'on' : 'off');
+      if (this.soundOn) {
+        this.enableSound();
+        this.sound('ding');
+      } else {
+        this.stopAmbient();
+      }
+    },
+
+    startAmbient() {
+      if (!this._audio || this._ambient) return;
+      const gain = this._audio.createGain();
+      const low = this._audio.createOscillator();
+      const high = this._audio.createOscillator();
+      low.type = 'sine';
+      high.type = 'sine';
+      low.frequency.value = 44;
+      high.frequency.value = 66;
+      gain.gain.value = .006;
+      low.connect(gain);
+      high.connect(gain);
+      gain.connect(this._audio.destination);
+      low.start();
+      high.start();
+      this._ambient = { low, high, gain };
+    },
+
+    stopAmbient() {
+      if (!this._ambient) return;
+      const current = this._ambient;
+      this._ambient = null;
+      try {
+        current.gain.gain.setTargetAtTime(0, this._audio.currentTime, .08);
+        window.setTimeout(() => {
+          current.low.stop();
+          current.high.stop();
+        }, 280);
+      } catch (_) {
+        // Audio may already be closed by the browser.
+      }
+    },
+
+    sound(kind) {
+      if (!this.soundOn) return;
+      this.enableSound();
+      if (!this._audio) return;
+      const tone = (frequency, duration, type = 'sine', volume = .035, delay = 0) => {
+        const start = this._audio.currentTime + delay;
+        const oscillator = this._audio.createOscillator();
+        const gain = this._audio.createGain();
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(volume, start + .012);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+        oscillator.connect(gain);
+        gain.connect(this._audio.destination);
+        oscillator.start(start);
+        oscillator.stop(start + duration + .03);
+      };
+      if (kind === 'ding') tone(880, .16, 'sine', .028);
+      if (kind === 'thud') {
+        tone(74, .3, 'sine', .075);
+        tone(111, .16, 'triangle', .025);
+      }
+      if (kind === 'winner') {
+        [523.25, 659.25, 783.99].forEach((frequency, index) => {
+          tone(frequency, 1.2, 'sine', .026, index * .09);
+        });
+      }
+      if (kind === 'tick') tone(320, .045, 'square', .01);
+    },
+
+    beamIndex(name) {
+      return this.participants.findIndex((participant) => participant.name === name);
+    },
+
+    setupStage() {
+      const canvas = this.$refs.stageCanvas;
+      const stage = this.$refs.stage;
+      if (!canvas || !stage) return;
+      const rect = stage.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const ctx = canvas.getContext('2d', { alpha: true });
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const count = Math.max(1, this.participants.length);
+      const column = rect.width / count;
+      const dust = [];
+      this.participants.forEach((participant, index) => {
+        const score = this.scoreFor(participant.name);
+        const ratio = this.beamMax ? score / this.beamMax : 0;
+        const amount = 6 + Math.round(ratio * 4);
+        for (let i = 0; i < amount; i += 1) {
+          dust.push({
+            x: (index + .5) * column + (Math.random() - .5) * column * .28,
+            y: rect.height - 38 - Math.random() * rect.height * .72,
+            speed: .012 + Math.random() * .022,
+            size: .8 + Math.random() * .9,
+            phase: Math.random() * Math.PI * 2,
+            color: agentColor(participant.name),
+          });
+        }
+      });
+      const audience = Array.from({ length: 20 }, (_, index) => ({
+        x: 18 + Math.random() * Math.max(1, rect.width - 36),
+        y: rect.height - 12 - Math.random() * 46,
+        phase: index * .61 + Math.random() * .8,
+        size: 1.2 + Math.random() * 1.4,
+      }));
+      this._scene = {
+        canvas,
+        ctx,
+        width: rect.width,
+        height: rect.height,
+        column,
+        dust,
+        audience,
+        trails: [],
+        fragments: [],
+        confetti: [],
+        startedAt: performance.now(),
+      };
+      this.scheduleVoltage();
+      this.drawStage(performance.now());
+      if (!this.reducedMotion && !this.replaying) this.startStageLoop();
+    },
+
+    resizeStage() {
+      window.clearTimeout(this._resizeTimer);
+      this._resizeTimer = window.setTimeout(() => this.setupStage(), 160);
+    },
+
+    startStageLoop() {
+      window.cancelAnimationFrame(this._stageFrame);
+      const frame = (now) => {
+        this.drawStage(now);
+        if (!this.reducedMotion && !this.replaying && !document.hidden) {
+          this._stageFrame = window.requestAnimationFrame(frame);
+        }
+      };
+      this._stageFrame = window.requestAnimationFrame(frame);
+    },
+
+    drawStage(now) {
+      const scene = this._scene;
+      if (!scene) return;
+      const { ctx, width, height } = scene;
+      const seconds = now / 1000;
+      ctx.clearRect(0, 0, width, height);
+
+      ctx.globalCompositeOperation = 'lighter';
+      for (const particle of scene.dust) {
+        if (!this.reducedMotion) {
+          particle.y -= particle.speed * 2.4;
+          particle.x += Math.sin(seconds * .55 + particle.phase) * .035;
+          if (particle.y < 44) particle.y = height - 42;
+        }
+        ctx.globalAlpha = .2 + Math.sin(seconds * 1.4 + particle.phase) * .08;
+        ctx.fillStyle = particle.color;
+        ctx.beginPath();
+        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      for (const seat of scene.audience) {
+        ctx.globalAlpha = .08 + (Math.sin(seconds * .7 + seat.phase) + 1) * .055;
+        ctx.fillStyle = '#dce4ff';
+        ctx.beginPath();
+        ctx.arc(seat.x, seat.y, seat.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (this.waitingMode) {
+        const x = ((now % 2400) / 2400) * width;
+        const gradient = ctx.createRadialGradient(x, height - 40, 0, x, height - 40, 70);
+        gradient.addColorStop(0, 'rgba(255,255,255,.38)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.globalAlpha = .7;
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x - 70, height - 70, 140, 60);
+      }
+
+      scene.trails = scene.trails.filter((trail) => now - trail.at < 620);
+      for (const trail of scene.trails) {
+        const progress = Math.min(1, (now - trail.at) / 420);
+        const fromX = (trail.from + .5) * scene.column;
+        const toX = (trail.to + .5) * scene.column;
+        ctx.globalAlpha = (1 - progress) * .8;
+        ctx.strokeStyle = '#ff2e63';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(fromX, height - 34);
+        ctx.quadraticCurveTo((fromX + toX) / 2, height - 65, toX, height - 34);
+        ctx.stroke();
+      }
+
+      scene.fragments = scene.fragments.filter((piece) => piece.life > 0);
+      for (const piece of scene.fragments) {
+        if (!this.reducedMotion) {
+          piece.life -= .012;
+          piece.x += piece.vx;
+          piece.y += piece.vy;
+          piece.vy += .06;
+        }
+        ctx.globalAlpha = Math.max(0, piece.life);
+        ctx.fillStyle = piece.color;
+        ctx.fillRect(piece.x, piece.y, piece.size, piece.size * 1.6);
+      }
+
+      scene.confetti = scene.confetti.filter((piece) => piece.life > 0);
+      for (const piece of scene.confetti) {
+        if (!this.reducedMotion) {
+          piece.life -= .0035;
+          piece.x += piece.vx + Math.sin(seconds * 3 + piece.phase) * .25;
+          piece.y += piece.vy;
+          piece.vy += .018;
+        }
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, piece.life * 1.8);
+        ctx.translate(piece.x, piece.y);
+        ctx.rotate(seconds * piece.spin + piece.phase);
+        ctx.fillStyle = piece.color;
+        ctx.fillRect(-piece.size / 2, -piece.size / 4, piece.size, piece.size / 2);
+        ctx.restore();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+    },
+
+    emitVoteTrail(voter, target) {
+      if (!this._scene) return;
+      const from = this.beamIndex(voter);
+      const to = this.beamIndex(target);
+      if (from < 0 || to < 0 || from === to) return;
+      this._scene.trails.push({ from, to, at: performance.now() });
+    },
+
+    emitEliminationParticles(name) {
+      if (!this._scene) return;
+      const index = this.beamIndex(name);
+      if (index < 0) return;
+      const scene = this._scene;
+      const x = (index + .5) * scene.column;
+      const color = agentColor(name);
+      for (let i = 0; i < 28; i += 1) {
+        scene.fragments.push({
+          x: x + (Math.random() - .5) * 26,
+          y: scene.height - 54 - Math.random() * scene.height * .55,
+          vx: (Math.random() - .5) * 1.8,
+          vy: -Math.random() * 1.1,
+          size: 1 + Math.random() * 2.4,
+          life: .7 + Math.random() * .3,
+          color,
+        });
+      }
+    },
+
+    emitWinnerConfetti() {
+      if (!this._scene) return;
+      const scene = this._scene;
+      const colors = ['#f2c14e', '#ffe7a0', '#ffffff', '#b98cff', '#4fe3c1'];
+      for (let i = 0; i < 60; i += 1) {
+        scene.confetti.push({
+          x: Math.random() * scene.width,
+          y: -10 - Math.random() * scene.height * .4,
+          vx: (Math.random() - .5) * .5,
+          vy: .55 + Math.random() * .9,
+          size: 3 + Math.random() * 4,
+          spin: (Math.random() - .5) * 4,
+          phase: Math.random() * Math.PI * 2,
+          life: .8 + Math.random() * .5,
+          color: colors[Math.floor(Math.random() * colors.length)],
+        });
+      }
+    },
+
+    scheduleVoltage() {
+      window.clearTimeout(this._voltageTimer);
+      if (this.reducedMotion) return;
+      const delay = 2600 + Math.random() * 6200;
+      this._voltageTimer = window.setTimeout(() => {
+        if (this.running && this.beamMax > 0 && !this.replaying) {
+          this.leaderFlicker = true;
+          window.setTimeout(() => { this.leaderFlicker = false; }, 130);
+        }
+        this.scheduleVoltage();
+      }, delay);
+    },
+
+    teardownStage() {
+      window.cancelAnimationFrame(this._stageFrame);
+      window.clearTimeout(this._resizeTimer);
+      window.clearTimeout(this._fxTimer);
+      window.clearTimeout(this._hitTimer);
+      window.clearTimeout(this._waitingTimer);
+      window.clearTimeout(this._voltageTimer);
+      window.clearTimeout(this._archiveTimer);
+      window.clearTimeout(this._settleTimer);
+      Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
+      this._nameTimers = {};
+      this.stopAmbient();
+      if (this._audio) {
+        try {
+          this._audio.close().catch?.(() => {});
+        } catch (_) {
+          // Audio may already be closed by the browser.
+        }
+        this._audio = null;
+      }
+      this._scene = null;
     },
 
     toggleModel(model, event) {
@@ -431,6 +901,25 @@ Vue.createApp({
       this.modelOutputs = {};
       this.modelOutputEls = {};
       this.modelStreamSeq = 0;
+      this.votingMode = false;
+      this.waitingMode = false;
+      this.eventFx = '';
+      this.hitAgent = '';
+      this.leaderFlicker = false;
+      this.liveVoteCounts = {};
+      this.decodedNames = {};
+      this.archiveStamp = '';
+      this.settledKey = '';
+      this.pointerX = 0;
+      this.pointerY = 0;
+      window.clearTimeout(this._fxTimer);
+      window.clearTimeout(this._hitTimer);
+      window.clearTimeout(this._waitingTimer);
+      window.clearTimeout(this._voltageTimer);
+      window.clearTimeout(this._archiveTimer);
+      window.clearTimeout(this._settleTimer);
+      Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
+      this._nameTimers = {};
       this.stopTimer();
     },
 
@@ -570,7 +1059,27 @@ Vue.createApp({
           }));
           this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
           this.beginStage('', '参赛阵容已就绪');
+          this.playFx('run-start', 1450);
+          this.$nextTick(this.setupStage);
           break;
+
+        case 'agent_info': {
+          let participant = this.participants.find((item) => item.name === ev.name);
+          if (!participant) {
+            participant = {
+              name: ev.name,
+              label: ev.label,
+              state: 'alive',
+              lastRole: '',
+              lastElapsed: 0,
+            };
+            this.participants.push(participant);
+          } else if (ev.label) {
+            participant.label = ev.label;
+          }
+          this.decodeAgentName(ev.name);
+          break;
+        }
 
         case 'round_start': {
           const round = this.ensureRound(ev.no);
@@ -579,6 +1088,7 @@ Vue.createApp({
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
           this.beginStage('', `第 ${ev.no} 轮准备发言`);
+          this.playFx('round-start', 550);
           this.scrollDown();
           break;
         }
@@ -601,6 +1111,9 @@ Vue.createApp({
           this.setAgentState(ev.agent, 'thinking');
           this.liveLabel = `${ev.agent} 正在组织${ev.role}`;
           this.beginStage(ev.agent, `${ev.role}中，等待模型返回`);
+          this.waitingMode = false;
+          this.playFx('scan', 620);
+          this.decodeAgentName(ev.agent);
           this.scrollDown();
           break;
         }
@@ -630,12 +1143,16 @@ Vue.createApp({
           this.stageStartedAt = Date.now() - Number(ev.elapsed || 0) * 1000;
           this.stageElapsed = Number(ev.elapsed || 0);
           this.liveLabel = `${ev.agent} · ${this.activeStage}`;
+          this.pulseWaiting();
           break;
 
         case 'speech': {
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
           round.speeches.push(ev);
+          this.settledKey = `${round.no}-${round.speeches.length - 1}`;
+          window.clearTimeout(this._settleTimer);
+          this._settleTimer = window.setTimeout(() => { this.settledKey = ''; }, 420);
           const outputs = { ...this.modelOutputs };
           delete outputs[ev.agent];
           this.modelOutputs = outputs;
@@ -653,6 +1170,9 @@ Vue.createApp({
           this.activeStage = ev.error ? '调用失败' : `${ev.role}完成`;
           this.stageStartedAt = 0;
           this.stageElapsed = Number(ev.elapsed || 0);
+          this.waitingMode = false;
+          this.playFx('settle', 380);
+          this.sound('tick');
           this.scrollDown();
           break;
         }
@@ -666,6 +1186,10 @@ Vue.createApp({
           };
           this.beginStage('', `${ev.voters} 位投票者正在判断本轮发言`);
           this.liveLabel = `第 ${ev.round_no} 轮 · ${this.voteStageLabel(ev.stage)}：${ev.voters} 位投票者`;
+          this.liveVoteCounts = {};
+          this.votingMode = true;
+          this.waitingMode = false;
+          this.playFx('voting-start', 680);
           break;
         }
 
@@ -685,6 +1209,15 @@ Vue.createApp({
             this.liveLabel = `${ev.voter} 已投给 ${ev.target}`;
             this.beginStage(ev.voter, `${this.voteStageLabel(ev.stage)}：已投票`);
             this.pushActivity('voting', `${ev.voter} 投给 ${ev.target}`, ev.voter);
+            if (ev.target) {
+              this.liveVoteCounts = {
+                ...this.liveVoteCounts,
+                [ev.target]: (this.liveVoteCounts[ev.target] || 0) + 1,
+              };
+              this.emitVoteTrail(ev.voter, ev.target);
+              this.flashHit(ev.target);
+              this.sound('ding');
+            }
           } else {
             this.liveLabel = `${ev.voter} 投票失败`;
             this.beginStage(ev.voter, `${this.voteStageLabel(ev.stage)}：投票失败`);
@@ -702,6 +1235,7 @@ Vue.createApp({
           else round.tiebreakSteps.push(step);
           this.beginStage('', `${ev.agents.join('、')} 平票，进入第 ${ev.attempt} 次加赛`);
           this.liveLabel = `第 ${ev.round_no} 轮 · ${ev.agents.join('、')} 平票加赛`;
+          this.playFx('tiebreak', 850);
           this.scrollDown();
           break;
         }
@@ -712,12 +1246,15 @@ Vue.createApp({
           if (step) Object.assign(step, ev);
           this.liveLabel = `第 ${ev.round_no} 轮 · 第 ${ev.attempt} 次加赛投票完成`;
           this.beginStage('', '加赛票已收到，正在本地汇总');
+          this.liveVoteCounts = {};
           break;
         }
 
         case 'votes': {
           const round = this.ensureRound(this.currentRound || 1);
           round.votes = ev;
+          this.liveVoteCounts = {};
+          this.votingMode = false;
           this.liveLabel = '票已收到，正在本地汇总票数';
           this.beginStage('', '票已收到，正在本地汇总票数');
           this.scrollDown();
@@ -731,6 +1268,11 @@ Vue.createApp({
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 出局，转为评审`;
           this.beginStage(ev.agent, `${ev.agent} 出局，转为评审`);
+          this.votingMode = false;
+          this.liveVoteCounts = {};
+          this.playFx('elimination', 1650);
+          this.emitEliminationParticles(ev.agent);
+          this.sound('thud');
           this.scrollDown();
           break;
         }
@@ -742,6 +1284,8 @@ Vue.createApp({
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 技术性退赛`;
           this.beginStage(ev.agent, `${ev.agent} 技术性退赛`);
+          this.playFx('elimination', 1200);
+          this.emitEliminationParticles(ev.agent);
           this.scrollDown();
           break;
         }
@@ -751,6 +1295,11 @@ Vue.createApp({
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 最终存活`;
           this.beginStage(ev.agent, `${ev.agent} 最终存活`);
+          this.votingMode = false;
+          this.waitingMode = false;
+          this.playFx('winner', 1600);
+          this.emitWinnerConfetti();
+          this.sound('winner');
           break;
 
         case 'final':
@@ -763,6 +1312,10 @@ Vue.createApp({
           break;
 
         case 'saved':
+          this.archiveStamp = String(ev.paths?.[0] || 'debate.md').split('/').pop();
+          window.clearTimeout(this._archiveTimer);
+          this._archiveTimer = window.setTimeout(() => { this.archiveStamp = ''; }, 2800);
+          this.playFx('saved', 1250);
           this.loadHistory();
           break;
 
@@ -783,6 +1336,8 @@ Vue.createApp({
           this.activeAgent = this.winnerName || '';
           this.activeStage = this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
           this.stageStartedAt = 0;
+          this.votingMode = false;
+          this.waitingMode = false;
           this.stopTimer();
           this.loadHistory();
           this.scrollDown();
@@ -885,6 +1440,10 @@ Vue.createApp({
         this.pushActivity('done', `载入历史提问：${transcript.proposition || id}`, transcript.winner || '');
         this.hint = '';
         this.scrollDown(true);
+        this.$nextTick(() => {
+          this.setupStage();
+          this.drawStage(performance.now());
+        });
       } catch (err) {
         this.hint = `历史回放失败：${err.message}`;
       }

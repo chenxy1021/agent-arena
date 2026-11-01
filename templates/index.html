@@ -23,6 +23,12 @@
       </div>
     </div>
     <div class="report-state">
+      <button type="button" class="sound-toggle" :class="{ on: soundOn }"
+        :aria-pressed="soundOn" @click="toggleSound"
+        :title="soundOn ? '关闭现场声音' : '打开现场声音'">
+        <span aria-hidden="true">{{ soundOn ? '◉' : '○' }}</span>
+        {{ soundOn ? '声音开' : '静音' }}
+      </button>
       <span class="state-word"
         :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status">
         {{ running ? 'LIVE · 比赛进行中' : replaying ? '历史回放' : statusText }}
@@ -115,9 +121,12 @@
       :class="{
         'is-done': !!winnerName,
         'is-replaying': replaying,
-        'is-tiebreak': activeStage.includes('加赛')
+        'is-tiebreak': activeStage.includes('加赛'),
+        'is-voting': votingMode,
+        'is-waiting': waitingMode
       }"
-      :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status">
+      :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status"
+      @pointermove="moveStage">
       <header class="show-head">
         <div class="show-topline">
           <span class="section-kicker">{{ replaying ? 'ARCHIVE · 赛事存档' : 'LIVE SHOW · 正在记录' }}</span>
@@ -139,7 +148,7 @@
 
           <div class="arena-clock">
             <span class="clock-label">{{ replaying ? 'RECORDED' : running ? 'LIVE' : 'CLOCK' }}</span>
-            <strong>{{ elapsedText }}</strong>
+            <strong><rolling-number :text="elapsedText" /></strong>
             <div class="clock-speaker">
               <span>{{ activeAgent || (running ? '等待发言' : '—') }}</span>
               <time>{{ stageElapsedText }}</time>
@@ -152,28 +161,38 @@
         </div>
       </header>
 
-      <section class="stage" aria-label="参赛模型追光舞台">
+      <section ref="stage" class="stage" :class="eventFx ? 'fx-' + eventFx : ''"
+        :style="stageTiltStyle" aria-label="参赛模型追光舞台">
         <div class="stage-ambient" aria-hidden="true"></div>
+        <canvas ref="stageCanvas" class="stage-canvas" aria-hidden="true"></canvas>
+        <div class="stage-grid" aria-hidden="true"></div>
+        <div class="stage-camera-sweep" aria-hidden="true"></div>
+        <div class="stage-transition" aria-hidden="true"></div>
         <div class="stage-lights">
           <article v-for="(p, index) in participants" :key="p.name" class="beam"
             :class="{
               active: running && p.name === activeAgent,
               thinking: p.state === 'thinking',
-              out: p.state === 'out'
+              out: p.state === 'out',
+              lead: scoreFor(p.name) > 0 && scoreFor(p.name) === beamMax,
+              hit: hitAgent === p.name,
+              flicker: leaderFlicker && scoreFor(p.name) === beamMax
             }"
             :style="{
               '--team-color': agentColor(p.name),
               '--beam-height': beamHeight(p.name) + '%',
-              '--beam-delay': (index * 90) + 'ms'
+              '--beam-scale': beamScale(p.name),
+              '--beam-delay': (index * 90) + 'ms',
+              '--sway-delay': (-index * .8) + 's'
             }">
-            <span class="beam-score">{{ scoreFor(p.name) }}</span>
+            <span class="beam-score"><rolling-number :text="String(scoreFor(p.name))" /></span>
             <span class="beam-shaft"><i></i></span>
             <span class="beam-spot"></span>
             <div class="beam-caption">
-              <b>{{ p.name }}</b>
+              <b>{{ displayName(p.name) }}</b>
               <small v-if="p.state === 'out'">出局</small>
-              <small v-else-if="running && p.name === activeAgent">发言中</small>
-              <small v-else-if="p.state === 'thinking'">思考中</small>
+              <small v-else-if="running && p.name === activeAgent">发言中 {{ stageElapsedText }}</small>
+              <small v-else-if="p.state === 'thinking'">思考中 {{ stageElapsedText }}</small>
               <small v-else>在场</small>
             </div>
           </article>
@@ -201,7 +220,7 @@
         <section v-for="round in rounds" :key="round.no" class="round-paper"
           :class="{ current: round.no === currentRound }">
           <aside class="round-index">
-            <span>{{ roundNo(round.no) }}</span>
+            <span><rolling-number :text="roundNo(round.no)" /></span>
             <small>ROUND</small>
           </aside>
 
@@ -221,17 +240,24 @@
                   <article v-for="stream in modelStreams" :key="`stream-${stream.agent}`"
                     class="stream-card" :class="{ active: stream.agent === activeAgent }"
                     :style="{ '--team-color': agentColor(stream.agent) }">
+                    <i class="stream-progress"
+                      :style="{ width: streamProgress(stream) + '%' }"></i>
                     <header>
                       <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
                       <span>{{ stream.role }}</span>
+                      <span class="stream-count">{{ streamChars(stream) }} 字</span>
                       <i v-if="stream.agent === activeAgent" class="stream-pulse"></i>
                     </header>
-                    <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
+                    <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}<i
+                      v-if="stream.agent === activeAgent" class="stream-caret" aria-hidden="true"></i></pre>
                   </article>
                 </div>
 
                 <article v-for="(speech, idx) in round.speeches" :key="`s-${idx}`"
-                  class="speech" :class="{ error: !!speech.error }"
+                  class="speech" :class="{
+                    error: !!speech.error,
+                    settled: settledKey === `${round.no}-${idx}`
+                  }"
                   :style="{ '--team-color': agentColor(speech.agent) }">
                   <header class="speech-head">
                     <span class="speech-ticket">
@@ -243,7 +269,8 @@
                   <div v-if="speech.error" class="speech-error">未完成：{{ speech.error }}</div>
                   <div v-else class="speech-body">
                     <div v-for="(block, bi) in speechBlocks(speech.text)" :key="bi"
-                      class="speech-block" :class="{ 'speech-gap': bi > 0 }">
+                      class="speech-block" :class="{ 'speech-gap': bi > 0 }"
+                      :style="{ '--block-index': bi }">
                       <span v-if="block.kind !== 'plain'" class="print-tag"
                         :class="block.kind === 'view' ? 'tag-view' : 'tag-critique'">
                         {{ block.kind === 'view' ? '【观点】' : '【点评】' }}
@@ -399,6 +426,20 @@
       </ul>
     </section>
   </main>
+
+  <aside v-if="running && activeAgent && !replaying" class="lower-third"
+    :style="{ '--team-color': agentColor(activeAgent) }">
+    <span class="lower-live">ON AIR</span>
+    <b>{{ activeAgent }}</b>
+    <small>{{ activeStage || '现场发言' }}</small>
+    <i :style="{ width: Math.max(0, Math.min(100, stageProgress)) + '%' }"></i>
+  </aside>
+
+  <div class="event-transition" :class="eventFx ? 'is-' + eventFx : ''" aria-hidden="true"></div>
+  <div v-if="archiveStamp" class="archive-stamp">
+    <span>已归档</span>
+    <small>{{ archiveStamp }}</small>
+  </div>
 
   <div v-if="showModelModal" class="modal-backdrop" @click.self="closeModelModal">
     <form class="modal" @submit.prevent="saveModel">
