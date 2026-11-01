@@ -26,12 +26,19 @@ Vue.createApp({
     return {
       proposition: '',
       mode: 'eliminate',
-      repeat: 2,
-      maxRounds: 0,
       timeout: 240,
-      mock: 0,
-      agents: [],
-      agentsLoading: true,
+      models: [],
+      modelsLoading: true,
+      showModelModal: false,
+      savingModel: false,
+      modelForm: {
+        name: '',
+        base_url: '',
+        api_key: '',
+        model: '',
+        system_prompt: '',
+        temperature: '',
+      },
       history: [],
       historyLoading: true,
       viewingHistoryId: '',
@@ -56,13 +63,19 @@ Vue.createApp({
       stageElapsed: 0,
       activity: [],
       activitySeq: 0,
+      modelOutputs: {},
+      modelOutputEls: {},
+      modelStreamSeq: 0,
       timer: null,
     };
   },
 
   computed: {
-    selectedKeys() {
-      return this.agents.filter((a) => a.checked).map((a) => a.key);
+    selectedModelIds() {
+      return this.models.filter((m) => m.checked).map((m) => m.id);
+    },
+    modelStreams() {
+      return Object.values(this.modelOutputs).sort((a, b) => b.seq - a.seq);
     },
     elapsedText() {
       const total = Math.max(0, Math.floor(this.elapsed));
@@ -83,7 +96,7 @@ Vue.createApp({
   },
 
   mounted() {
-    this.loadAgents();
+    this.loadModels();
     this.loadHistory();
     this.attachActive();
     window.addEventListener('beforeunload', this.closeStream);
@@ -146,26 +159,90 @@ Vue.createApp({
       this.stageElapsed = 0;
     },
 
-    toggleAgent(agent, event) {
-      if (agent.unavailable) return;
-      if (event.target.tagName !== 'INPUT') agent.checked = !agent.checked;
+    bindOutputEl(agent, element) {
+      if (element) this.modelOutputEls[agent] = element;
+      else delete this.modelOutputEls[agent];
     },
 
-    async loadAgents(refresh = false) {
-      this.agentsLoading = true;
+    scrollOutput(agent) {
+      const element = this.modelOutputEls[agent];
+      if (element) element.scrollTop = element.scrollHeight;
+    },
+
+    toggleModel(model, event) {
+      if (event.target.tagName !== 'INPUT') model.checked = !model.checked;
+    },
+
+    async loadModels() {
+      this.modelsLoading = true;
       try {
-        const res = await fetch(`/api/agents?refresh=${refresh ? 'true' : 'false'}`);
+        const res = await fetch('/api/models');
         const data = await res.json();
         if (!res.ok) throw new Error(cleanError(data));
-        this.agents = (data.agents || []).map((a) => ({
-          ...a,
-          checked: !a.unavailable,
+        const selected = new Map(this.models.map((item) => [item.id, item.checked]));
+        this.models = (data.models || []).map((item) => ({
+          ...item,
+          checked: selected.has(item.id) ? selected.get(item.id) : true,
         }));
       } catch (err) {
-        this.agents = [];
-        this.hint = `探测失败：${err.message}`;
+        this.models = [];
+        this.hint = `模型列表读取失败：${err.message}`;
       } finally {
-        this.agentsLoading = false;
+        this.modelsLoading = false;
+      }
+    },
+
+    openModelModal() {
+      this.modelForm = {
+        name: '',
+        base_url: '',
+        api_key: '',
+        model: '',
+        system_prompt: '',
+        temperature: '',
+      };
+      this.showModelModal = true;
+    },
+
+    closeModelModal() {
+      if (!this.savingModel) this.showModelModal = false;
+    },
+
+    async saveModel() {
+      if (this.savingModel) return;
+      this.savingModel = true;
+      this.hint = '';
+      try {
+        const res = await fetch('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...this.modelForm,
+            temperature: this.modelForm.temperature === ''
+              ? null
+              : Number(this.modelForm.temperature),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.showModelModal = false;
+        await this.loadModels();
+      } catch (err) {
+        this.hint = err.message;
+      } finally {
+        this.savingModel = false;
+      }
+    },
+
+    async deleteModel(model) {
+      if (!window.confirm(`删除模型「${model.name}」？`)) return;
+      try {
+        const res = await fetch(`/api/models/${model.id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.models = this.models.filter((item) => item.id !== model.id);
+      } catch (err) {
+        this.hint = `删除失败：${err.message}`;
       }
     },
 
@@ -203,6 +280,9 @@ Vue.createApp({
       this.stageElapsed = 0;
       this.activity = [];
       this.activitySeq = 0;
+      this.modelOutputs = {};
+      this.modelOutputEls = {};
+      this.modelStreamSeq = 0;
       this.stopTimer();
     },
 
@@ -230,23 +310,24 @@ Vue.createApp({
         this.hint = '先写一个命题';
         return;
       }
+      if (this.selectedModelIds.length < 2) {
+        this.hint = '至少选择 2 个参赛大模型';
+        return;
+      }
       this.hint = '';
       this.resetArena();
       this.running = true;
       this.status = 'running';
       this.statusText = '比赛中';
       this.liveLabel = '正在组建参赛阵容…';
-      this.beginStage('', '正在探测并组建参赛阵容');
+      this.beginStage('', '正在连接参赛大模型');
       this.startTimer();
 
       const payload = {
         proposition,
         vote_mode: this.mode,
-        repeat: Number(this.repeat) || 1,
-        max_rounds: Number(this.maxRounds) || 0,
         timeout: Number(this.timeout) || 240,
-        mock: Number(this.mock) || 0,
-        agents: this.mock ? [] : this.selectedKeys,
+        model_ids: this.selectedModelIds,
       };
 
       try {
@@ -354,10 +435,35 @@ Vue.createApp({
           if (!round.thinking.some((x) => x.agent === ev.agent && x.role === ev.role)) {
             round.thinking.push({ agent: ev.agent, role: ev.role });
           }
+          this.modelOutputs = {
+            ...this.modelOutputs,
+            [ev.agent]: {
+              agent: ev.agent,
+              role: ev.role,
+              text: '',
+              seq: ++this.modelStreamSeq,
+            },
+          };
           this.setAgentState(ev.agent, 'thinking');
           this.liveLabel = `${ev.agent} 正在组织${ev.role}`;
           this.beginStage(ev.agent, `${ev.role}中，等待模型返回`);
           this.scrollDown();
+          break;
+        }
+
+        case 'model_output': {
+          const current = this.modelOutputs[ev.agent] || {
+            agent: ev.agent,
+            role: ev.role,
+            text: '',
+            seq: ++this.modelStreamSeq,
+          };
+          current.text = `${current.text}${ev.text || ''}`.slice(-16000);
+          this.modelOutputs = { ...this.modelOutputs, [ev.agent]: current };
+          this.$nextTick(() => this.scrollOutput(ev.agent));
+          this.activeAgent = ev.agent;
+          this.activeStage = `${ev.role}中 · 模型正在逐字返回`;
+          this.liveLabel = `${ev.agent} 正在实时输出`;
           break;
         }
 
@@ -374,6 +480,9 @@ Vue.createApp({
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
           round.speeches.push(ev);
+          if (ev.text && this.modelOutputs[ev.agent] && !this.modelOutputs[ev.agent].text) {
+            this.modelOutputs[ev.agent].text = ev.text;
+          }
           this.setAgentState(ev.agent, 'alive');
           const participant = this.participants.find((p) => p.name === ev.agent);
           if (participant) {
@@ -467,7 +576,7 @@ Vue.createApp({
           this.scrollDown();
           break;
       }
-      if (ev.kind !== 'waiting') {
+      if (ev.kind !== 'waiting' && ev.kind !== 'model_output') {
         this.pushActivity(ev.kind, this.liveLabel, ev.agent || '');
       }
     },

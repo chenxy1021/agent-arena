@@ -1,48 +1,48 @@
 # Agent Arena
 
-把本机安装的 AI agent CLI 拉进同一场辩论：轮流发言、交叉点评、全员投票、淘汰到最后一人，再由胜者给出最终结论。
+让多个 OpenAI-compatible 大模型参加同一场辩论：独立首轮、跨轮点评、全员投票、逐轮淘汰，最后由胜者给出结论。
 
 ## 技术栈
 
 - 后端：FastAPI + Uvicorn
 - 实时过程：Server-Sent Events（SSE）
 - 前端：Vue 3，本地运行时，无构建步骤
-- 历史记录：SQLite
-- 赛制与 CLI 适配：Python 标准库，外部 CLI 运行在独立工作目录
+- 历史与模型配置：SQLite
+- 依赖管理：uv
 
 ## 启动
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
+uv run python arena.py --serve
 
-# 图形界面
-python arena.py --serve
-
-# 或者直接启动 ASGI 应用
-uvicorn config.asgi:app --reload
-
-# 命令行
-python arena.py "小团队该不该上 Kubernetes"
+# 或直接启动 ASGI 应用
+uv run uvicorn config.asgi:app --reload
 ```
 
-图形界面默认打开 `http://127.0.0.1:7788/`，端口被占用时自动向后寻找可用端口。
+网页默认打开 `http://127.0.0.1:7788/`，端口被占用时自动向后寻找可用端口。
 
-离线演示不需要任何真实模型：
+## 添加模型
 
-```bash
-python arena.py "团队应该优先追求速度还是质量" --mock 4
-```
+在网页左侧点击「添加模型」，填写：
 
-## 主要功能
+- 显示名称
+- Base URL，例如 `https://api.openai.com/v1`
+- API Key
+- 模型 ID
+- 系统提示词（选填）
+- 温度（选填）
 
-- 实时展示每轮发言顺序、agent 思考状态、单次耗时、投票明细和淘汰过程。
-- 右侧实时进程栏显示当前调用、等待秒数、事件轨迹和各 agent 最近一次发言耗时。
-- 支持 `eliminate`（投最没用）和 `support`（投最该留）两种规则。
-- 已出局者禁言，但保留评审投票权。
-- 历史提问存入 `arena.db`，旧版 `runs/` 战报会在启动时自动补录。
-- 历史记录可以回放完整的发言、投票和最终结论。
+接口需要兼容 OpenAI 的 `POST /chat/completions`，并支持流式返回。API Key 只保存在本机 `arena.db`，列表接口不会返回 Key。
+
+## 赛制
+
+1. 第一轮不点评。每个模型独立给出观点，看不到其他模型本轮输出。
+2. 第二轮起只点评上一轮全部发言。本轮其他模型的发言不会进入提示词。
+3. 每轮结束后，存活模型和已出局评审共同投票。
+4. 淘汰制投「最没用」，评选制投「最该留下」，直到只剩一人。
+
+右侧「模型思考 / 实时输出」展示服务商实际返回的流式内容。它展示的是可观察输出，不是伪造的隐藏思维链。
 
 ## 目录结构
 
@@ -60,32 +60,33 @@ python arena.py "团队应该优先追求速度还是质量" --mock 4
 │   └── arena/
 │       ├── api.py           # API 路由
 │       ├── schemas.py       # Pydantic 请求模型
-│       ├── services.py      # 比赛生命周期与后台线程
-│       ├── adapters.py      # CLI 探测与调用
+│       ├── services.py      # 比赛生命周期
+│       ├── providers.py     # OpenAI-compatible 流式模型适配
 │       ├── moderator.py     # 赛制核心
-│       ├── database.py      # SQLite 历史
+│       ├── prompts.py       # 发言与投票提示词
+│       ├── database.py      # SQLite 历史与模型配置
 │       └── ...
-├── templates/
-│   └── index.html           # Vue 页面模板
-├── static/
-│   ├── app.js
-│   ├── style.css
-│   └── vendor/
-└── tests/
+├── templates/index.html     # Vue 页面模板
+├── static/                  # 前端脚本、样式和 Vue 运行时
+├── tests/
+├── pyproject.toml
+└── uv.lock
 ```
 
 ## 平票规则
 
-投票先按当前轮规则确定最低或最高票数；若多人平票，按以下顺序确定性裁决：
+投票先按当前轮规则确定最低或最高票数；若多人平票，依次按以下规则裁决：
 
 1. `eliminate`：累计得票更多的人出局；`support`：累计支持票更少的人出局。
-2. 累计分数仍相同，则本轮观点信息量更少（字数更少）的人出局。
-3. 仍然相同，则按 agent 名字字典序决定，保证同样输入得到同样结果。
+2. 累计分数仍相同，则本轮观点信息量更少的人出局。
+3. 仍然相同，则按模型名字字典序决定，保证结果确定。
 4. 如果整轮没有任何有效票，直接按本轮观点信息量最少、再按名字决定。
 
 ## 主要接口
 
-- `GET /api/agents`：探测本机 agent CLI。
+- `GET /api/models`：读取模型配置，不返回 API Key。
+- `POST /api/models`：添加模型。
+- `DELETE /api/models/{id}`：删除模型。
 - `POST /api/runs`：启动比赛。
 - `GET /api/runs/active`：获取正在运行的比赛。
 - `GET /api/runs/{id}/events`：SSE 实时事件，支持 `Last-Event-ID` 断线续传。
@@ -95,10 +96,10 @@ python arena.py "团队应该优先追求速度还是质量" --mock 4
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 node --check static/app.js
 ```
 
 ## 安全边界
 
-Web 服务只监听 `127.0.0.1`，面向本机使用。真实比赛会调用你安装的 agent CLI，请确认对应工具的登录态、额度和命令参数；不要在不信任的命题或自定义命令中暴露敏感数据。
+Web 服务只监听 `127.0.0.1`。模型 API Key 以明文存入本机 SQLite，因此不要提交 `arena.db`，也不要让不可信用户访问本机服务。

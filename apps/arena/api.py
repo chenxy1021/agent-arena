@@ -14,8 +14,7 @@ from fastapi.responses import StreamingResponse
 from config import settings
 
 from . import database
-from .adapters import unavailable_agents
-from .schemas import StartRun
+from .schemas import ModelCreate, StartRun
 from .services import manager
 
 router = APIRouter()
@@ -26,25 +25,39 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/agents")
-def agents(refresh: bool = False, deep: bool = True) -> dict[str, Any]:
-    found = manager.list_agents(deep=deep, refresh=refresh)
-    blocked = unavailable_agents()
-    return {
-        "agents": [
-            {
-                "key": agent.spec.key,
-                "label": agent.label,
-                "path": agent.path,
-                "version": agent.version,
-                "note": agent.spec.note,
-                "requires": agent.spec.requires,
-                "discovered": agent.spec.discovered,
-                "unavailable": blocked.get(agent.spec.key, ""),
-            }
-            for agent in found
-        ]
-    }
+@router.get("/models")
+def models() -> dict[str, Any]:
+    return {"models": database.list_models()}
+
+
+@router.post("/models", status_code=201)
+def create_model(payload: ModelCreate) -> dict[str, Any]:
+    name = payload.name.strip()
+    base_url = payload.base_url.strip()
+    api_key = payload.api_key.strip()
+    model = payload.model.strip()
+    if not name or not api_key or not model:
+        raise HTTPException(status_code=400, detail="名称、API Key 和模型 ID 不能为空")
+    if not base_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+    config = database.create_model(
+        name=name,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        system_prompt=payload.system_prompt.strip(),
+        temperature=payload.temperature,
+    )
+    config.pop("api_key", None)
+    config["has_api_key"] = True
+    return config
+
+
+@router.delete("/models/{model_id}")
+def remove_model(model_id: int) -> dict[str, bool]:
+    if not database.delete_model(model_id):
+        raise HTTPException(status_code=404, detail="模型配置不存在")
+    return {"deleted": True}
 
 
 @router.post("/runs", status_code=201)

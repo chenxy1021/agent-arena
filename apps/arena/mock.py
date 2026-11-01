@@ -81,7 +81,14 @@ class MockAgent:
     def __repr__(self) -> str:
         return f"<MockAgent {self.name}>"
 
-    def ask(self, prompt: str, workdir=None, timeout: float = 0, retries: int = 0) -> CallResult:
+    def ask(
+        self,
+        prompt: str,
+        workdir=None,
+        timeout: float = 0,
+        retries: int = 0,
+        on_output=None,
+    ) -> CallResult:
         started = time.monotonic()
         time.sleep(self.rng.uniform(0.05, 0.35))
         self.calls += 1
@@ -94,33 +101,35 @@ class MockAgent:
             text = self._final(prompt)
         else:
             text = self._speech(prompt)
+        if on_output:
+            on_output(text)
         return CallResult(text=text, elapsed=time.monotonic() - started)
 
     # -- 内部 ----------------------------------------------------------
     def _speech(self, prompt: str) -> str:
-        has_prior = "没有前序发言" not in prompt
-        prev = ""
-        if has_prior:
-            m = re.search(r"【本轮已有发言】\n\n【([^】]+)】", prompt)
-            prev = m.group(1) if m else "对方"
+        round_one = "这是第一轮" in prompt
+        previous_names: list[str] = []
+        if not round_one:
+            m = re.search(r"【上一轮完整发言】\n(.*?)\n\n【你上一轮", prompt, re.S)
+            if m:
+                previous_names = re.findall(r"【([^】]+)】", m.group(1))
 
         body = (
-            f"{self.rng.choice(_ANGLE)}。" if not has_prior
-            else f"{self.rng.choice(_ANGLE)}，我认同{prev}的一部分判断，但方向要修正。"
+            f"{self.rng.choice(_ANGLE)}。" if round_one
+            else f"{self.rng.choice(_ANGLE)}，我保留上一轮讨论中的有效部分，但方向要修正。"
         )
         view = (
             f"{body}具体来说，{self.rng.choice(_EVIDENCE)}。"
             f"我的判断是：{self.rng.choice(_JUDGEMENT)}。"
             f"{self.rng.choice(_ACTION)}"
         )
-        if has_prior:
-            comment = (
-                f"{self.rng.choice(_CRITIQUE_GOOD)}；{self.rng.choice(_CRITIQUE_BAD)}。"
-                f"{self.rng.choice(_SUGGEST)}"
-            )
-        else:
-            comment = "（开场）"
-        return f"【点评】{comment}\n【观点】{view}"
+        if round_one:
+            return f"【观点】{view}"
+        comments = "；".join(
+            f"{name}：{self.rng.choice(_CRITIQUE_GOOD)}，{self.rng.choice(_CRITIQUE_BAD)}"
+            for name in (previous_names or ["上一轮发言"])
+        )
+        return f"【点评】{comments}。{self.rng.choice(_SUGGEST)}。\n【观点】{view}"
 
     def _vote(self, prompt: str) -> str:
         m = re.search(r"【(?:本轮)?存活参赛者】(.*)", prompt)

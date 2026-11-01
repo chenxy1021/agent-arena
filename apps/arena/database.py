@@ -31,6 +31,18 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+CREATE TABLE IF NOT EXISTS model_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    model TEXT NOT NULL,
+    system_prompt TEXT NOT NULL DEFAULT '',
+    temperature REAL,
+    created_ts REAL NOT NULL,
+    updated_ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_configs_created ON model_configs(created_ts DESC);
 """
 
 
@@ -45,6 +57,59 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+
+
+def create_model(
+    *,
+    name: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    system_prompt: str = "",
+    temperature: float | None = None,
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    init_db(db_path)
+    now = time.time()
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO model_configs
+                (name, base_url, api_key, model, system_prompt, temperature, created_ts, updated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, base_url, api_key, model, system_prompt, temperature, now, now),
+        )
+        model_id = int(cursor.lastrowid)
+    return get_model(model_id, db_path=db_path) or {}
+
+
+def list_models(db_path: Path | None = None) -> list[dict[str, Any]]:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, base_url, model, system_prompt, temperature,
+                   created_ts, updated_ts, 1 AS has_api_key
+            FROM model_configs
+            ORDER BY created_ts DESC, id DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_model(model_id: int, db_path: Path | None = None) -> dict[str, Any] | None:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM model_configs WHERE id = ?", (model_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_model(model_id: int, db_path: Path | None = None) -> bool:
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        cursor = conn.execute("DELETE FROM model_configs WHERE id = ?", (model_id,))
+    return cursor.rowcount > 0
 
 
 def create_run(

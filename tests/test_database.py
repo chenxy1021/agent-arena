@@ -61,5 +61,29 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertEqual(row["winner"], "mock#2")
 
 
+class ModelDatabaseTest(unittest.TestCase):
+    def test_model_crud_never_lists_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "arena.db"
+            created = database.create_model(
+                name="模型A",
+                base_url="https://example.com/v1",
+                api_key="secret-key",
+                model="model-a",
+                system_prompt="简洁回答",
+                temperature=0.5,
+                db_path=db_path,
+            )
+            rows = database.list_models(db_path=db_path)
+            full = database.get_model(created["id"], db_path=db_path)
+            deleted = database.delete_model(created["id"], db_path=db_path)
+
+        self.assertEqual(rows[0]["name"], "模型A")
+        self.assertNotIn("api_key", rows[0])
+        self.assertEqual(rows[0]["has_api_key"], 1)
+        self.assertEqual(full["api_key"], "secret-key")
+        self.assertTrue(deleted)
+
+
 if __name__ == "__main__":
     unittest.main()

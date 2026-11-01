@@ -12,4 +12,4 @@ RUNS_DIR = BASE_DIR / "runs"
 DATABASE_PATH = Path(os.environ.get("ARENA_DB", BASE_DIR / "arena.db"))
 
 APP_TITLE = "Agent Arena"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"

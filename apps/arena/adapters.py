@@ -384,7 +384,9 @@ class CliAgent:
         workdir: Path,
         timeout: float = 240,
         retries: int = 1,
+        on_output: Callable[[str], None] | None = None,
     ) -> CallResult:
+        # CLI mode returns its output at process exit; the web UI uses API streaming.
         build = BUILDERS.get(self.spec.key, _simple(()))
         last_err = ""
         for attempt in range(retries + 1):

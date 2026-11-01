@@ -5,6 +5,7 @@ from pathlib import Path
 from apps.arena.mock import MockAgent
 from apps.arena.events import RecordingSink
 from apps.arena.moderator import Arena, ArenaConfig, Speech
+from apps.arena import prompts
 
 
 class DecideTiebreakTest(unittest.TestCase):
@@ -63,6 +64,36 @@ class ProgressEventTest(unittest.TestCase):
 
         self.assertFalse(result.error)
         self.assertTrue(any(event["kind"] == "waiting" for event in sink.events))
+        self.assertTrue(any(event["kind"] == "model_output" for event in sink.events))
+
+
+class SpeechPromptVisibilityTest(unittest.TestCase):
+    def build(self, round_no: int, previous):
+        return prompts.build_speech_prompt(
+            speaker="模型A",
+            proposition="测试命题",
+            active=["模型A", "模型B"],
+            eliminated=[],
+            round_no=round_no,
+            previous_round_speeches=previous,
+            my_last_stance=None,
+        )
+
+    def test_round_one_is_independent_and_has_no_critique(self) -> None:
+        prompt = self.build(1, [])
+
+        self.assertIn("这是第一轮", prompt)
+        self.assertNotIn("【点评】", prompt)
+        self.assertIn("看不到其他模型本轮的发言", prompt)
+
+    def test_later_round_sees_only_previous_round(self) -> None:
+        prompt = self.build(2, [("模型A", "上一轮观点"), ("模型B", "另一个上一轮观点")])
+
+        self.assertIn("【上一轮完整发言】", prompt)
+        self.assertIn("上一轮观点", prompt)
+        self.assertIn("另一个上一轮观点", prompt)
+        self.assertIn("点评上一轮所有模型", prompt)
+        self.assertNotIn("本轮已有发言", prompt)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@
       </div>
       <div>
         <h1>AGENT ARENA</h1>
-        <p>本地 agent 辩论淘汰赛</p>
+        <p>多模型辩论淘汰赛</p>
       </div>
     </div>
     <div class="statusbar">
@@ -59,46 +59,29 @@
 
       <section class="field">
         <div class="labelrow">
-          <label>参赛 CLI</label>
-          <button type="button" class="mini" :disabled="agentsLoading"
-            @click="loadAgents(true)">{{ agentsLoading ? '扫描中…' : '重新扫描' }}</button>
+          <label>参赛大模型</label>
+          <button type="button" class="mini" @click="openModelModal">＋ 添加模型</button>
         </div>
         <ul class="agents">
-          <li v-if="agentsLoading" class="loading">扫描中…</li>
-          <li v-else-if="!agents.length" class="loading">
-            没探测到 agent CLI。可填写 Mock 人数做离线演示。
+          <li v-if="modelsLoading" class="loading">读取中…</li>
+          <li v-else-if="!models.length" class="loading">
+            还没有模型配置，点击「添加模型」填写 API 参数。
           </li>
-          <li v-for="a in agents" :key="a.key"
-            :class="{ blocked: !!a.unavailable, checked: a.checked }"
-            @click="toggleAgent(a, $event)">
-            <input type="checkbox" :checked="a.checked" :disabled="!!a.unavailable"
-              @click.stop @change="a.checked = $event.target.checked">
-            <span class="agent-name">{{ a.key }}</span>
-            <span v-if="a.unavailable" class="tag-warn" :title="a.unavailable">不可用</span>
-            <span v-else-if="a.discovered" class="tag-new">自动发现</span>
-            <span class="agent-meta" :title="a.requires || a.path">{{ a.version || '' }}</span>
+          <li v-for="m in models" :key="m.id" :class="{ checked: m.checked }"
+            @click="toggleModel(m, $event)">
+            <input type="checkbox" :checked="m.checked"
+              @click.stop @change="m.checked = $event.target.checked">
+            <span class="agent-name">{{ m.name }}</span>
+            <span class="agent-meta" :title="m.base_url">{{ m.model }}</span>
+            <button type="button" class="agent-delete" title="删除模型"
+              @click.stop="deleteModel(m)">×</button>
           </li>
         </ul>
       </section>
 
-      <section class="field grid2">
-        <div>
-          <label for="repeat">每 CLI 实例</label>
-          <input id="repeat" v-model.number="repeat" type="number" min="1" max="8">
-        </div>
-        <div>
-          <label for="maxrounds">最多轮数</label>
-          <input id="maxrounds" v-model.number="maxRounds" type="number" min="0" max="30" title="0 表示自动：人数减一">
-        </div>
-        <div>
-          <label for="timeout">单次超时(秒)</label>
-          <input id="timeout" v-model.number="timeout" type="number" min="5" step="5">
-        </div>
-        <div>
-          <label for="mock">Mock 人数</label>
-          <input id="mock" v-model.number="mock" type="number" min="0" max="16"
-            title="填 4 可用假 agent 离线演示，不调用真实 CLI">
-        </div>
+      <section class="field">
+        <label for="timeout">单次超时(秒)</label>
+        <input id="timeout" v-model.number="timeout" type="number" min="5" step="5">
       </section>
 
       <button type="button" class="primary" :disabled="running"
@@ -156,8 +139,8 @@
               <path d="M12 1.8 21 12l-9 10.2L3 12z" fill="none" stroke="currentColor" stroke-width="1.1"/>
             </svg>
           </div>
-          <p>左侧填个命题，选好参赛者，点「开始比赛」</p>
-          <p class="sub">比赛开始后，思考、发言、投票和淘汰都会实时出现在这里。</p>
+          <p>左侧添加两个大模型、填写命题，点「开始比赛」</p>
+          <p class="sub">比赛开始后，模型实时输出、发言、投票和淘汰都会出现在这里。</p>
         </div>
 
         <section v-for="round in rounds" :key="round.no" class="round">
@@ -277,6 +260,22 @@
         </div>
       </section>
 
+      <section class="model-live">
+        <div class="labelrow">
+          <label>模型思考 / 实时输出</label>
+          <span class="subtle-count">{{ modelStreams.length }}</span>
+        </div>
+        <div v-if="!modelStreams.length" class="loading">模型返回内容时，这里会逐字显示。</div>
+        <article v-for="stream in modelStreams" :key="stream.agent" class="model-stream"
+          :style="{ '--accent': agentColor(stream.agent) }">
+          <header>
+            <b>{{ stream.agent }}</b>
+            <span>{{ stream.role }}</span>
+          </header>
+          <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
+        </article>
+      </section>
+
       <section class="activity">
         <div class="labelrow">
           <label>思考与调用轨迹</label>
@@ -306,6 +305,49 @@
       </section>
     </aside>
   </main>
+
+  <div v-if="showModelModal" class="modal-backdrop" @click.self="closeModelModal">
+    <form class="modal" @submit.prevent="saveModel">
+      <div class="modal-head">
+        <div>
+          <h2>添加参赛大模型</h2>
+          <p>兼容 OpenAI 的 <code>/chat/completions</code> 接口。Key 只保存在本机 SQLite。</p>
+        </div>
+        <button type="button" class="modal-close" @click="closeModelModal">×</button>
+      </div>
+      <div class="model-form">
+        <label>显示名称
+          <input v-model.trim="modelForm.name" required maxlength="80" placeholder="例如：GPT-5">
+        </label>
+        <label>Base URL
+          <input v-model.trim="modelForm.base_url" required type="url"
+            placeholder="https://api.openai.com/v1">
+        </label>
+        <label>API Key
+          <input v-model.trim="modelForm.api_key" required type="password"
+            autocomplete="off" placeholder="sk-...">
+        </label>
+        <label>模型 ID
+          <input v-model.trim="modelForm.model" required maxlength="200"
+            placeholder="例如：gpt-5">
+        </label>
+        <label>系统提示词（选填）
+          <textarea v-model="modelForm.system_prompt" rows="3"
+            placeholder="给这个模型的额外角色或回答要求"></textarea>
+        </label>
+        <label>温度（选填）
+          <input v-model="modelForm.temperature" type="number" min="0" max="2" step="0.1"
+            placeholder="例如：0.7">
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="mini" :disabled="savingModel" @click="closeModelModal">取消</button>
+        <button type="submit" class="primary" :disabled="savingModel">
+          {{ savingModel ? '保存中…' : '保存模型' }}
+        </button>
+      </div>
+    </form>
+  </div>
 </div>
 <script src="/static/vendor/vue.global.prod.js"></script>
 <script src="/static/app.js"></script>

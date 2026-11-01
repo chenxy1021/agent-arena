@@ -1,8 +1,7 @@
-"""业务服务层：比赛生命周期、agent 发现缓存与后台线程。"""
+"""业务服务层：比赛生命周期与后台线程。"""
 
 from __future__ import annotations
 
-import copy
 import threading
 import time
 import uuid
@@ -11,10 +10,9 @@ from typing import Any
 from config import settings
 
 from . import database
-from .adapters import CliAgent, discover, make_custom_agent, unavailable_agents
 from .events import RecordingSink
-from .mock import MockAgent
 from .moderator import Arena, ArenaConfig
+from .providers import ApiModelAgent
 from .schemas import StartRun
 
 
@@ -44,8 +42,6 @@ class Manager:
     def __init__(self) -> None:
         self.runs: dict[str, RunState] = {}
         self.lock = threading.Lock()
-        self._agent_cache: dict[str, Any] = {"at": 0.0, "agents": []}
-        self._cache_ttl = 30.0
 
     def get(self, run_id: str) -> RunState | None:
         with self.lock:
@@ -55,43 +51,33 @@ class Manager:
         with self.lock:
             return next((run for run in self.runs.values() if run.status == "running"), None)
 
-    def list_agents(self, deep: bool = True, refresh: bool = False) -> list[CliAgent]:
-        with self.lock:
-            fresh = time.monotonic() - self._agent_cache["at"] < self._cache_ttl
-            if fresh and not refresh and self._agent_cache["agents"]:
-                return self._agent_cache["agents"]
-            agents = discover(deep=deep)
-            self._agent_cache.update(at=time.monotonic(), agents=agents)
-            return agents
-
     def start(self, payload: StartRun) -> RunState:
         proposition = payload.proposition.strip()
         if not proposition:
             raise ValueError("命题不能为空")
 
-        agents: list[Any] = []
-        if payload.mock:
-            agents = [MockAgent(name=f"mock{i + 1}") for i in range(max(payload.mock, 2))]
-        else:
-            found = self.list_agents(refresh=payload.refresh)
-            blocked = unavailable_agents()
-            selected = set(payload.agents)
-            picked = [a for a in found if a.spec.key in selected] if selected else [
-                a for a in found if a.spec.key not in blocked
-            ]
-            for agent in picked:
-                for _ in range(payload.repeat):
-                    agents.append(copy.copy(agent))
-            for item in payload.customs:
-                try:
-                    custom = make_custom_agent(item.name.strip(), item.cmd.strip())
-                except ValueError as exc:
-                    raise ValueError(f"自定义命令无效：{exc}") from exc
-                for _ in range(payload.repeat):
-                    agents.append(copy.copy(custom))
-
+        agents: list[ApiModelAgent] = []
+        seen: set[int] = set()
+        for model_id in payload.model_ids:
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            config = database.get_model(model_id)
+            if not config:
+                raise ValueError(f"模型配置 #{model_id} 不存在")
+            agents.append(
+                ApiModelAgent(
+                    config_id=model_id,
+                    name=str(config["name"]),
+                    base_url=str(config["base_url"]),
+                    api_key=str(config["api_key"]),
+                    model=str(config["model"]),
+                    system_prompt=str(config.get("system_prompt") or ""),
+                    temperature=config.get("temperature"),
+                )
+            )
         if len(agents) < 2:
-            raise ValueError("至少需要 2 个 agent（可提高每个 CLI 的实例数）")
+            raise ValueError("至少需要选择 2 个参赛大模型")
 
         run_id = uuid.uuid4().hex[:12]
         run = RunState(run_id, proposition)
@@ -106,7 +92,7 @@ class Manager:
 
         cfg = ArenaConfig(
             proposition=proposition,
-            max_rounds=payload.max_rounds,
+            max_rounds=0,
             timeout=payload.timeout,
             out_dir=settings.RUNS_DIR,
             vote_mode=payload.vote_mode,

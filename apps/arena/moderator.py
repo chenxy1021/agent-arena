@@ -1,7 +1,7 @@
-"""赛制核心：顺序发言 → 交叉点评 → 全员投票 → 淘汰 → 直到剩一人。
+"""赛制核心：独立首轮 → 跨轮点评 → 全员投票 → 淘汰 → 直到剩一人。
 
 规则要点（改动请保持语义一致）：
-1. 每轮按顺序发言，后一位必须先点评上一位，再给自己的观点；
+1. 第一轮所有模型独立发言；第二轮起只点评上一轮，且看不到本轮其他模型输出；
 2. 投票由「存活者 + 已出局的评审」一起投，评审不再发言但保留投票权；
 3. 出局规则可切换：
    - eliminate（默认）：投最没用的，票多者出局；
@@ -169,12 +169,14 @@ def _digest(rounds: Sequence[RoundRecord], limit: int = 4000) -> str:
 
 
 def assign_names(agents: Sequence[Any]) -> None:
-    """同名 CLI 多实例时编号：claude#1、claude#2。"""
+    """Keep unique names unchanged; number only duplicate display names."""
+    keys = [getattr(getattr(ag, "spec", None), "key", "agent") or "agent" for ag in agents]
+    totals: Counter[str] = Counter(keys)
     counter: Counter[str] = Counter()
     for ag in agents:
         key = getattr(getattr(ag, "spec", None), "key", "agent") or "agent"
         counter[key] += 1
-        ag.name = f"{key}#{counter[key]}"
+        ag.name = f"{key}#{counter[key]}" if totals[key] > 1 else key
 
 
 # ----------------------------------------------------------------------
@@ -247,16 +249,21 @@ class Arena:
             record.order = [a.name for a in order]
             self.sink.emit("round_start", no=rnd, alive=len(active), order=record.order)
 
-            # ---- 1. 顺序发言（出局者不在此列表里，自然禁言）----
+            previous_speeches = (
+                [(s.agent, s.text) for s in rounds[-1].speeches]
+                if rounds else []
+            )
+
+            # ---- 1. 独立发言 / 只点评上一轮 ----
             for agent in order:
-                prior = [(s.agent, s.text) for s in record.speeches]
-                role = "开场发言" if not prior else "回应发言"
+                role = "独立发言" if rnd == 1 else "跨轮点评"
                 prompt = prompts.build_speech_prompt(
                     speaker=agent.name,
                     proposition=cfg.proposition,
                     active=[a.name for a in active],
                     eliminated=[(e["agent"], e["reason"]) for e in eliminated],
-                    prior_speeches=prior,
+                    round_no=rnd,
+                    previous_round_speeches=previous_speeches,
                     my_last_stance=self._last_stance.get(agent.name),
                     vote_mode=cfg.vote_mode,
                 )
@@ -378,8 +385,13 @@ class Arena:
         return Speech(rnd, agent.name, role, res.text, res.elapsed)
 
     def _ask_with_progress(self, agent: Any, prompt: str, role: str) -> CallResult:
-        """阻塞调用期间定期发 waiting 事件，让前端知道进程仍在工作。"""
+        """Forward streamed model output and keep emitting waiting heartbeats."""
         interval = max(0.05, self.cfg.waiting_interval)
+
+        def on_output(chunk: str) -> None:
+            if chunk:
+                self.sink.emit("model_output", agent=agent.name, role=role, text=chunk)
+
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(
                 agent.ask,
@@ -387,6 +399,7 @@ class Arena:
                 self._workdir(agent),
                 self.cfg.timeout,
                 self.cfg.retries,
+                on_output,
             )
             started = time.monotonic()
             while not future.done():
