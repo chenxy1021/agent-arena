@@ -108,11 +108,6 @@ class MockAgent:
     # -- 内部 ----------------------------------------------------------
     def _speech(self, prompt: str) -> str:
         round_one = "这是第一轮" in prompt
-        previous_names: list[str] = []
-        if not round_one:
-            m = re.search(r"【上一轮完整发言】\n(.*?)\n\n【你上一轮", prompt, re.S)
-            if m:
-                previous_names = re.findall(r"【([^】]+)】", m.group(1))
 
         body = (
             f"{self.rng.choice(_ANGLE)}。" if round_one
@@ -125,11 +120,11 @@ class MockAgent:
         )
         if round_one:
             return f"【观点】{view}"
-        comments = "；".join(
-            f"{name}：{self.rng.choice(_CRITIQUE_GOOD)}，{self.rng.choice(_CRITIQUE_BAD)}"
-            for name in (previous_names or ["上一轮发言"])
+        summary = (
+            f"此前讨论{self.rng.choice(_CRITIQUE_GOOD)}，"
+            f"但{self.rng.choice(_CRITIQUE_BAD)}"
         )
-        return f"【点评】{comments}。{self.rng.choice(_SUGGEST)}。\n【观点】{view}"
+        return f"【点评】{summary}。\n【观点】{view}"
 
     def _vote(self, prompt: str) -> str:
         m = re.search(r"【(?:本轮)?存活参赛者】(.*)", prompt)

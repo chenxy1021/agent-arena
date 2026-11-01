@@ -250,21 +250,22 @@ class Arena:
             record.order = [a.name for a in order]
             self.sink.emit("round_start", no=rnd, alive=len(active), order=record.order)
 
-            previous_speeches = (
-                [(s.agent, s.text) for s in rounds[-1].speeches]
-                if rounds else []
-            )
+            prior_speeches = [
+                (s.agent, s.text)
+                for round_record in rounds
+                for s in round_record.speeches
+            ]
 
-            # ---- 1. 独立发言 / 只点评上一轮 ----
+            # ---- 1. 独立发言 / 综合此前讨论并提出新观点 ----
             for agent in order:
-                role = "独立发言" if rnd == 1 else "跨轮点评"
+                role = "独立发言" if rnd == 1 else "综合发言"
                 prompt = prompts.build_speech_prompt(
                     speaker=agent.name,
                     proposition=cfg.proposition,
                     active=[a.name for a in active],
                     eliminated=[(e["agent"], e["reason"]) for e in eliminated],
                     round_no=rnd,
-                    previous_round_speeches=previous_speeches,
+                    prior_speeches=prior_speeches,
                     my_last_stance=self._last_stance.get(agent.name),
                     vote_mode=cfg.vote_mode,
                 )

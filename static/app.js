@@ -187,6 +187,10 @@ Vue.createApp({
       return this.scoreByName[name] || 0;
     },
 
+    agentModel(name) {
+      return this.participants.find((item) => item.name === name)?.label || '';
+    },
+
     modeLabel(mode) {
       return mode === 'support' ? '票少者出局' : '票多者出局';
     },

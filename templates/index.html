@@ -178,7 +178,9 @@
                   class="speech" :class="{ error: !!speech.error }"
                   :style="{ '--team-color': agentColor(speech.agent) }">
                   <header class="speech-head">
-                    <span class="speech-ticket">{{ speech.agent }}</span>
+                    <span class="speech-ticket">
+                      {{ speech.agent }}<small v-if="agentModel(speech.agent)"> · {{ agentModel(speech.agent) }}</small>
+                    </span>
                     <span class="speech-role">{{ speech.role }}</span>
                     <time v-if="!speech.error">{{ Number(speech.elapsed || 0).toFixed(1) }}s</time>
                   </header>
@@ -197,7 +199,9 @@
                 <div v-for="item in round.thinking" :key="`t-${item.agent}-${item.role}`"
                   class="speech pending-speech" :style="{ '--team-color': agentColor(item.agent) }">
                   <header class="speech-head">
-                    <span class="speech-ticket">{{ item.agent }}</span>
+                    <span class="speech-ticket">
+                      {{ item.agent }}<small v-if="agentModel(item.agent)"> · {{ agentModel(item.agent) }}</small>
+                    </span>
                     <span class="speech-role">{{ item.role }}中</span>
                     <span class="writing-dots"><i></i><i></i><i></i></span>
                   </header>
@@ -238,7 +242,7 @@
                   <div v-if="modelStreams.length" class="live-output-list">
                     <article v-for="stream in modelStreams" :key="stream.agent" class="live-output">
                       <header>
-                        <b>{{ stream.agent }}</b>
+                        <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
                         <span>{{ stream.role }}</span>
                       </header>
                       <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>

@@ -19,7 +19,7 @@ def build_speech_prompt(
     active: Sequence[str],
     eliminated: Sequence[tuple[str, str]],
     round_no: int,
-    previous_round_speeches: Sequence[tuple[str, str]],
+    prior_speeches: Sequence[tuple[str, str]],
     my_last_stance: str | None,
     vote_mode: str = "eliminate",
 ) -> str:
@@ -36,9 +36,9 @@ def build_speech_prompt(
             "得票最多者出局。所以你的发言要经得起别人挑刺。"
         )
 
-    if previous_round_speeches:
+    if prior_speeches:
         history_block = "\n\n".join(
-            f"【{name}】\n{_clip(text)}" for name, text in previous_round_speeches
+            f"【{name}】\n{_clip(text)}" for name, text in prior_speeches
         )
     else:
         history_block = "（第一轮没有历史发言）"
@@ -57,16 +57,15 @@ def build_speech_prompt(
         visibility = "第一轮只能看到命题，看不到其他模型本轮的发言。"
     else:
         task = (
-            "第一步：点评上一轮所有模型的发言，逐个指出其中最站得住的一点、最脆弱的一点，"
-            "并给出一条具体改进建议。不要只挑一个人点评。\n"
-            "第二步：给出你自己的新看法，必须补充新论据、新角度或可落地方案，禁止复读他人观点。"
+            "先用一到两句话概括此前几轮讨论的整体优点和不足，不要逐个模型点评，也不要长篇复盘。\n"
+            "然后把主要篇幅放在你自己的新观点上，补充新论据、新角度或可落地方案，禁止复读他人观点。"
         )
         format_block = (
-            "【点评】<逐一评价上一轮每位模型，每个不超过 80 字>\n"
-            "【观点】<150-250 字：核心判断 + 关键论据 + 可执行建议>"
+            "【点评】<80 字以内：只总结此前讨论的整体优点与不足>\n"
+            "【观点】<200-350 字：重点输出你的核心判断 + 新论据 + 可执行建议>"
         )
         visibility = (
-            "你只能看到上一轮的完整发言；本轮其他模型尚未展示给你的发言你无法看到，"
+            "你能看到此前所有轮次的完整发言；本轮其他模型尚未展示给你的发言你无法看到，"
             "不要猜测或假装看过。"
         )
 
@@ -79,7 +78,7 @@ def build_speech_prompt(
 【存活参赛者】{", ".join(active)}
 【已淘汰】{elim_block}
 
-【上一轮完整发言】
+【前几轮完整发言】
 {history_block}
 
 【你上一轮的核心立场】

@@ -112,14 +112,14 @@ class ProgressEventTest(unittest.TestCase):
 
 
 class SpeechPromptVisibilityTest(unittest.TestCase):
-    def build(self, round_no: int, previous):
+    def build(self, round_no: int, prior):
         return prompts.build_speech_prompt(
             speaker="模型A",
             proposition="测试命题",
             active=["模型A", "模型B"],
             eliminated=[],
             round_no=round_no,
-            previous_round_speeches=previous,
+            prior_speeches=prior,
             my_last_stance=None,
         )
 
@@ -130,13 +130,15 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
         self.assertNotIn("【点评】", prompt)
         self.assertIn("看不到其他模型本轮的发言", prompt)
 
-    def test_later_round_sees_only_previous_round(self) -> None:
+    def test_later_round_summarizes_prior_rounds_and_focuses_on_new_view(self) -> None:
         prompt = self.build(2, [("模型A", "上一轮观点"), ("模型B", "另一个上一轮观点")])
 
-        self.assertIn("【上一轮完整发言】", prompt)
+        self.assertIn("【前几轮完整发言】", prompt)
         self.assertIn("上一轮观点", prompt)
         self.assertIn("另一个上一轮观点", prompt)
-        self.assertIn("点评上一轮所有模型", prompt)
+        self.assertIn("整体优点和不足", prompt)
+        self.assertIn("不要逐个模型点评", prompt)
+        self.assertIn("主要篇幅放在你自己的新观点", prompt)
         self.assertNotIn("本轮已有发言", prompt)
 
 
