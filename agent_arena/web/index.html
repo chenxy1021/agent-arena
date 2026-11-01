@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Arena · 多智能体辩论淘汰赛</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app" v-cloak>
+  <div class="glow"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+          <path d="M12 1.8 21 12l-9 10.2L3 12z" fill="currentColor"/>
+        </svg>
+      </div>
+      <div>
+        <h1>AGENT ARENA</h1>
+        <p>本地 agent 辩论淘汰赛</p>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span v-if="running" class="pill live-pill" data-state="running">
+        <span class="pulse"></span>{{ elapsedText }}
+      </span>
+      <span class="pill" :data-state="status">{{ statusText }}</span>
+      <span class="pill ghost">第 {{ currentRound }} 轮</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel config">
+      <section class="field">
+        <label for="proposition">命题</label>
+        <textarea id="proposition" v-model="proposition" rows="3"
+          placeholder="例如：三个人的团队该不该上 Kubernetes？"
+          @keydown.meta.enter="startMatch" @keydown.ctrl.enter="startMatch"></textarea>
+      </section>
+
+      <section class="field">
+        <label>出局规则</label>
+        <div class="modes">
+          <button type="button" class="mode" :class="{ active: mode === 'eliminate' }"
+            @click="mode = 'eliminate'">
+            <b>淘汰制</b>
+            <small>投最没用 · 票多出局</small>
+          </button>
+          <button type="button" class="mode" :class="{ active: mode === 'support' }"
+            @click="mode = 'support'">
+            <b>评选制</b>
+            <small>投最该留 · 票少出局</small>
+          </button>
+        </div>
+        <p class="note">出局后立即禁言，但转为评审，继续参与每一轮投票。</p>
+      </section>
+
+      <section class="field">
+        <div class="labelrow">
+          <label>参赛 CLI</label>
+          <button type="button" class="mini" :disabled="agentsLoading"
+            @click="loadAgents(true)">{{ agentsLoading ? '扫描中…' : '重新扫描' }}</button>
+        </div>
+        <ul class="agents">
+          <li v-if="agentsLoading" class="loading">扫描中…</li>
+          <li v-else-if="!agents.length" class="loading">
+            没探测到 agent CLI。可填写 Mock 人数做离线演示。
+          </li>
+          <li v-for="a in agents" :key="a.key"
+            :class="{ blocked: !!a.unavailable, checked: a.checked }"
+            @click="toggleAgent(a, $event)">
+            <input type="checkbox" :checked="a.checked" :disabled="!!a.unavailable"
+              @click.stop @change="a.checked = $event.target.checked">
+            <span class="agent-name">{{ a.key }}</span>
+            <span v-if="a.unavailable" class="tag-warn" :title="a.unavailable">不可用</span>
+            <span v-else-if="a.discovered" class="tag-new">自动发现</span>
+            <span class="agent-meta" :title="a.requires || a.path">{{ a.version || '' }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="field grid2">
+        <div>
+          <label for="repeat">每 CLI 实例</label>
+          <input id="repeat" v-model.number="repeat" type="number" min="1" max="8">
+        </div>
+        <div>
+          <label for="maxrounds">最多轮数</label>
+          <input id="maxrounds" v-model.number="maxRounds" type="number" min="0" max="30" title="0 表示自动：人数减一">
+        </div>
+        <div>
+          <label for="timeout">单次超时(秒)</label>
+          <input id="timeout" v-model.number="timeout" type="number" min="5" step="5">
+        </div>
+        <div>
+          <label for="mock">Mock 人数</label>
+          <input id="mock" v-model.number="mock" type="number" min="0" max="16"
+            title="填 4 可用假 agent 离线演示，不调用真实 CLI">
+        </div>
+      </section>
+
+      <button type="button" class="primary" :disabled="running"
+        @click="startMatch">{{ running ? '比赛中…' : (rounds.length ? '再来一场' : '开始比赛') }}</button>
+      <p class="hint">{{ hint }}</p>
+
+      <section class="field history">
+        <div class="labelrow">
+          <label>历史提问</label>
+          <button type="button" class="mini" :disabled="historyLoading"
+            @click="loadHistory">{{ historyLoading ? '读取中…' : '刷新' }}</button>
+        </div>
+        <ul>
+          <li v-if="historyLoading" class="loading">加载中…</li>
+          <li v-else-if="!history.length" class="loading">还没有历史记录</li>
+          <li v-for="item in history" :key="item.id"
+            :class="{ current: item.id === viewingHistoryId }"
+            @click="loadHistoryRun(item.id)">
+            <div class="history-title">{{ item.proposition }}</div>
+            <span>
+              {{ historyStatus(item) }} · {{ item.participants }} 人
+              <template v-if="item.winner"> · 胜者 {{ item.winner }}</template>
+              <template v-if="item.started_at"> · {{ item.started_at.slice(5, 16) }}</template>
+            </span>
+          </li>
+        </ul>
+      </section>
+    </aside>
+
+    <section class="arena">
+      <div v-if="participants.length" class="live-strip" :data-state="status">
+        <div class="live-copy">
+          <span class="live-kicker">{{ replaying ? 'HISTORY' : 'LIVE' }}</span>
+          <strong>{{ liveLabel }}</strong>
+        </div>
+        <div class="live-clock" v-if="winnerName">胜者 <b>{{ winnerName }}</b></div>
+        <div class="live-clock" v-else-if="running">{{ elapsedText }}</div>
+      </div>
+
+      <div v-if="participants.length" class="board">
+        <div v-for="p in participants" :key="p.name" class="chip"
+          :class="{ out: p.state === 'out', thinking: p.state === 'thinking' }">
+          <span class="dot" :style="{ background: agentColor(p.name) }"></span>
+          <span class="name">{{ p.name }}</span>
+          <span class="role" :style="{ color: agentColor(p.name) }">
+            {{ p.state === 'out' ? '评审 · 已禁言' : p.state === 'thinking' ? '思考中' : '存活' }}
+          </span>
+        </div>
+      </div>
+
+      <div ref="stream" class="stream">
+        <div v-if="!rounds.length" class="empty">
+          <div class="empty-mark">
+            <svg viewBox="0 0 24 24" width="46" height="46" aria-hidden="true">
+              <path d="M12 1.8 21 12l-9 10.2L3 12z" fill="none" stroke="currentColor" stroke-width="1.1"/>
+            </svg>
+          </div>
+          <p>左侧填个命题，选好参赛者，点「开始比赛」</p>
+          <p class="sub">比赛开始后，思考、发言、投票和淘汰都会实时出现在这里。</p>
+        </div>
+
+        <section v-for="round in rounds" :key="round.no" class="round">
+          <div class="round-head">
+            <span class="round-no">ROUND {{ round.no }}</span>
+            <span class="round-meta">存活 {{ round.alive }} 人 · {{ round.order.join(' → ') }}</span>
+          </div>
+          <div class="round-body">
+            <article v-for="(speech, idx) in round.speeches" :key="`s-${idx}`"
+              class="speech" :class="{ error: !!speech.error }"
+              :style="{ '--accent': agentColor(speech.agent) }">
+              <div class="speech-head">
+                <span class="speech-name">{{ speech.agent }}</span>
+                <span class="speech-role">{{ speech.role }}</span>
+                <span class="speech-time" v-if="!speech.error">{{ Number(speech.elapsed || 0).toFixed(1) }}s</span>
+              </div>
+              <div v-if="speech.error" class="err">发言失败：{{ speech.error }}</div>
+              <div v-else class="speech-body">
+                <div v-for="(block, bi) in speechBlocks(speech.text)" :key="bi"
+                  :class="{ 'speech-gap': bi > 0 }">
+                  <span v-if="block.kind !== 'plain'" class="tag"
+                    :class="block.kind === 'view' ? 'tag-view' : 'tag-critique'">
+                    {{ block.kind === 'view' ? '观点' : '点评' }}
+                  </span>{{ block.text }}
+                </div>
+              </div>
+            </article>
+
+            <div v-for="item in round.thinking" :key="`t-${item.agent}-${item.role}`"
+              class="speech thinking" :style="{ '--accent': '#2b3a4a' }">
+              <div class="speech-head">
+                <span class="speech-name muted-name">{{ item.agent }}</span>
+                <span class="speech-role">{{ item.role }}中…</span>
+                <span class="thinking-dots"><i></i><i></i><i></i></span>
+              </div>
+            </div>
+
+            <div v-for="(exit, xi) in round.exits" :key="`x-${xi}`" class="technical">
+              {{ exit.agent }} 连续调用失败，技术性退赛：{{ exit.error }}
+            </div>
+
+            <div v-if="round.votes" class="votes">
+              <div class="votes-title">
+                投票结果 · {{ modeLabel(round.votes.vote_mode) }}
+              </div>
+              <div v-for="entry in voteBars(round.votes)" :key="entry.name" class="vote-row">
+                <div class="voter" :style="{ color: agentColor(entry.name) }">{{ entry.name }}</div>
+                <div class="bar-wrap">
+                  <div class="bar" :style="{
+                    width: entry.width + '%',
+                    background: agentColor(entry.name),
+                    opacity: .75
+                  }"></div>
+                </div>
+                <div class="count">{{ entry.count }} 票</div>
+              </div>
+              <div v-if="!voteBars(round.votes).length" class="vote-line">无有效票</div>
+              <div class="vote-detail">
+                <div v-for="(row, vi) in round.votes.rows" :key="`v-${vi}`" class="vote-line">
+                  <span>{{ row.voter }}
+                    <span v-if="row.is_judge" class="badge">评审</span>
+                  </span>
+                  <span class="to">→ {{ row.target || '弃权' }}</span>
+                  <span class="why">{{ row.reason || row.error || '' }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="round.eliminated" class="eliminated">
+              <span>✖ 出局</span>
+              <span class="who">{{ round.eliminated.agent }}</span>
+              <span>{{ round.eliminated.votes }} 票</span>
+              <span class="sub">{{ round.eliminated.tiebreak || '转为评审，禁言但保留投票权' }}</span>
+            </div>
+          </div>
+        </section>
+
+        <article v-if="final" class="winner-card">
+          <div class="winner-top">
+            <div class="crown">★</div>
+            <div>
+              <div class="winner-name">{{ final.agent }}</div>
+              <div class="winner-sub">最终存活 · 本场胜者</div>
+            </div>
+          </div>
+          <div class="final-text">
+            <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
+              :class="{ 'speech-gap': i > 0 }">
+              <span v-if="block.kind !== 'plain'" class="sec">{{ block.label }}</span>{{ block.text }}
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
