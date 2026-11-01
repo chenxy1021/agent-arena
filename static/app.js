@@ -50,6 +50,12 @@ Vue.createApp({
       eventCount: 0,
       startedAt: 0,
       elapsed: 0,
+      activeAgent: '',
+      activeStage: '',
+      stageStartedAt: 0,
+      stageElapsed: 0,
+      activity: [],
+      activitySeq: 0,
       timer: null,
     };
   },
@@ -63,6 +69,16 @@ Vue.createApp({
       const min = String(Math.floor(total / 60)).padStart(2, '0');
       const sec = String(total % 60).padStart(2, '0');
       return `${min}:${sec}`;
+    },
+    stageElapsedText() {
+      const total = Math.max(0, Math.floor(this.stageElapsed));
+      const min = String(Math.floor(total / 60)).padStart(2, '0');
+      const sec = String(total % 60).padStart(2, '0');
+      return `${min}:${sec}`;
+    },
+    stageProgress() {
+      if (!this.stageElapsed) return 0;
+      return Math.min(100, (this.stageElapsed / Math.max(1, Number(this.timeout))) * 100);
     },
   },
 
@@ -90,6 +106,44 @@ Vue.createApp({
       if (item.status === 'running') return '进行中';
       if (item.status === 'error') return '失败';
       return '已完成';
+    },
+
+    activityKind(kind) {
+      const labels = {
+        run_start: '启动',
+        round_start: '轮次',
+        thinking: '思考',
+        waiting: '等待',
+        speech: '发言',
+        voting_start: '投票',
+        votes: '计票',
+        elimination: '淘汰',
+        technical_exit: '退出',
+        winner: '胜出',
+        final: '总结',
+        saved: '保存',
+        error: '错误',
+        done: '结束',
+      };
+      return labels[kind] || '事件';
+    },
+
+    pushActivity(kind, text, agent = '') {
+      this.activity.unshift({
+        id: ++this.activitySeq,
+        kind,
+        text,
+        agent,
+        clock: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      });
+      this.activity = this.activity.slice(0, 80);
+    },
+
+    beginStage(agent, text) {
+      this.activeAgent = agent || '';
+      this.activeStage = text;
+      this.stageStartedAt = Date.now();
+      this.stageElapsed = 0;
     },
 
     toggleAgent(agent, event) {
@@ -143,6 +197,12 @@ Vue.createApp({
       this.liveLabel = '等待开始';
       this.replaying = false;
       this.viewingHistoryId = '';
+      this.activeAgent = '';
+      this.activeStage = '';
+      this.stageStartedAt = 0;
+      this.stageElapsed = 0;
+      this.activity = [];
+      this.activitySeq = 0;
       this.stopTimer();
     },
 
@@ -152,6 +212,9 @@ Vue.createApp({
       this.elapsed = 0;
       this.timer = window.setInterval(() => {
         this.elapsed = (Date.now() - this.startedAt) / 1000;
+        if (this.stageStartedAt) {
+          this.stageElapsed = (Date.now() - this.stageStartedAt) / 1000;
+        }
       }, 1000);
     },
 
@@ -173,6 +236,7 @@ Vue.createApp({
       this.status = 'running';
       this.statusText = '比赛中';
       this.liveLabel = '正在组建参赛阵容…';
+      this.beginStage('', '正在探测并组建参赛阵容');
       this.startTimer();
 
       const payload = {
@@ -268,8 +332,11 @@ Vue.createApp({
             name: a.name,
             label: a.label,
             state: 'alive',
+            lastRole: '',
+            lastElapsed: 0,
           }));
           this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
+          this.beginStage('', '参赛阵容已就绪');
           break;
 
         case 'round_start': {
@@ -277,6 +344,7 @@ Vue.createApp({
           round.alive = ev.alive;
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
+          this.beginStage('', `第 ${ev.no} 轮准备发言`);
           this.scrollDown();
           break;
         }
@@ -288,27 +356,52 @@ Vue.createApp({
           }
           this.setAgentState(ev.agent, 'thinking');
           this.liveLabel = `${ev.agent} 正在组织${ev.role}`;
+          this.beginStage(ev.agent, `${ev.role}中，等待模型返回`);
           this.scrollDown();
           break;
         }
+
+        case 'waiting':
+          this.setAgentState(ev.agent, 'thinking');
+          this.activeAgent = ev.agent;
+          this.activeStage = `${ev.role}中，已等待 ${Number(ev.elapsed || 0).toFixed(1)} 秒`;
+          this.stageStartedAt = Date.now() - Number(ev.elapsed || 0) * 1000;
+          this.stageElapsed = Number(ev.elapsed || 0);
+          this.liveLabel = `${ev.agent} · ${this.activeStage}`;
+          break;
 
         case 'speech': {
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
           round.speeches.push(ev);
           this.setAgentState(ev.agent, 'alive');
+          const participant = this.participants.find((p) => p.name === ev.agent);
+          if (participant) {
+            participant.lastRole = ev.role;
+            participant.lastElapsed = ev.elapsed;
+          }
           this.liveLabel = ev.error
             ? `${ev.agent} 发言失败`
             : `${ev.agent} 发言完成，用时 ${Number(ev.elapsed || 0).toFixed(1)} 秒`;
+          this.activeAgent = ev.agent;
+          this.activeStage = ev.error ? '调用失败' : `${ev.role}完成`;
+          this.stageStartedAt = 0;
+          this.stageElapsed = Number(ev.elapsed || 0);
           this.scrollDown();
           break;
         }
+
+        case 'voting_start':
+          this.beginStage('', `${ev.voters} 位投票者正在并行投票`);
+          this.liveLabel = `第 ${ev.round_no} 轮 · 全员投票中`;
+          break;
 
         case 'votes': {
           const round = this.ensureRound(this.currentRound || 1);
           round.votes = ev;
           round.thinking = [];
           this.liveLabel = '投票完成，正在计票';
+          this.beginStage('', '投票完成，正在计票');
           this.scrollDown();
           break;
         }
@@ -318,6 +411,7 @@ Vue.createApp({
           round.eliminated = ev;
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 出局，转为评审`;
+          this.beginStage(ev.agent, `${ev.agent} 出局，转为评审`);
           this.scrollDown();
           break;
         }
@@ -327,6 +421,7 @@ Vue.createApp({
           round.exits.push(ev);
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 技术性退赛`;
+          this.beginStage(ev.agent, `${ev.agent} 技术性退赛`);
           this.scrollDown();
           break;
         }
@@ -335,6 +430,7 @@ Vue.createApp({
           this.winnerName = ev.agent;
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 最终存活`;
+          this.beginStage(ev.agent, `${ev.agent} 最终存活`);
           break;
 
         case 'final':
@@ -342,6 +438,7 @@ Vue.createApp({
           this.rounds.forEach((round) => { round.thinking = []; });
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 正在整理最终结论`;
+          this.beginStage(ev.agent, '正在整理最终结论');
           this.scrollDown(true);
           break;
 
@@ -362,10 +459,16 @@ Vue.createApp({
           this.liveLabel = this.final ? '比赛结束，可以回看全过程' : '比赛结束';
           this.rounds.forEach((round) => { round.thinking = []; });
           this.elapsed = Number(ev.duration || this.elapsed);
+          this.activeAgent = this.winnerName || '';
+          this.activeStage = this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
+          this.stageStartedAt = 0;
           this.stopTimer();
           this.loadHistory();
           this.scrollDown();
           break;
+      }
+      if (ev.kind !== 'waiting') {
+        this.pushActivity(ev.kind, this.liveLabel, ev.agent || '');
       }
     },
 
@@ -381,6 +484,7 @@ Vue.createApp({
         this.status = 'running';
         this.statusText = '接续中';
         this.liveLabel = '正在接回比赛现场…';
+        this.beginStage('', '正在接回比赛现场');
         this.startTimer();
         this.openStream(data.run.id);
       } catch (_) {
@@ -413,6 +517,8 @@ Vue.createApp({
           name: p.name,
           label: p.label,
           state: 'alive',
+          lastRole: '',
+          lastElapsed: 0,
         }));
         this.winnerName = transcript.winner || '';
         for (const record of transcript.rounds || []) {
@@ -421,6 +527,13 @@ Vue.createApp({
           round.alive = round.order.length;
           round.speeches = record.speeches || [];
           round.exits = record.exits || [];
+          for (const speech of round.speeches) {
+            const participant = this.participants.find((p) => p.name === speech.agent);
+            if (participant) {
+              participant.lastRole = speech.role;
+              participant.lastElapsed = speech.elapsed;
+            }
+          }
           if (record.votes && record.votes.length) {
             round.votes = {
               rows: record.votes,
@@ -440,6 +553,11 @@ Vue.createApp({
         if (transcript.winner && transcript.final_answer) {
           this.final = { agent: transcript.winner, text: transcript.final_answer };
         }
+        this.liveLabel = '历史战报已载入';
+        this.activeAgent = transcript.winner || '';
+        this.activeStage = '历史回放完成';
+        this.stageElapsed = Number(transcript.duration || 0);
+        this.pushActivity('done', `载入历史提问：${transcript.proposition || id}`, transcript.winner || '');
         this.hint = '';
         this.scrollDown(true);
       } catch (err) {

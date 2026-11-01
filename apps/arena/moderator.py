@@ -15,7 +15,7 @@ import json
 import re
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -73,6 +73,7 @@ class ArenaConfig:
     out_dir: Path = Path("runs")
     retries: int = 1
     vote_mode: str = "eliminate"  # eliminate | support
+    waiting_interval: float = 2.0  # 调用期间推送等待进度的间隔（秒）
 
 
 @dataclass
@@ -260,7 +261,7 @@ class Arena:
                     vote_mode=cfg.vote_mode,
                 )
                 self.sink.emit("thinking", agent=agent.name, role=role)
-                res = agent.ask(prompt, self._workdir(agent), cfg.timeout, cfg.retries)
+                res = self._ask_with_progress(agent, prompt, role)
                 record.speeches.append(self._record_speech(rnd, agent, role, res))
 
             # ---- 2. 技术性退赛（连续说不出话，不占用投票名额）----
@@ -281,6 +282,7 @@ class Arena:
 
             # ---- 3. 全员投票：存活者 + 评审团 ----
             voters = list(self._judges) + list(active)
+            self.sink.emit("voting_start", round_no=rnd, voters=len(voters))
             votes = self._collect_votes(voters, active, record.speeches, eliminated, rnd)
             record.votes = votes
             counts = Counter(v.target for v in votes if v.target)
@@ -374,6 +376,30 @@ class Arena:
         self.sink.emit("speech", agent=agent.name, role=role,
                        text=res.text, elapsed=res.elapsed, error=None)
         return Speech(rnd, agent.name, role, res.text, res.elapsed)
+
+    def _ask_with_progress(self, agent: Any, prompt: str, role: str) -> CallResult:
+        """阻塞调用期间定期发 waiting 事件，让前端知道进程仍在工作。"""
+        interval = max(0.05, self.cfg.waiting_interval)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                agent.ask,
+                prompt,
+                self._workdir(agent),
+                self.cfg.timeout,
+                self.cfg.retries,
+            )
+            started = time.monotonic()
+            while not future.done():
+                try:
+                    return future.result(timeout=interval)
+                except FutureTimeout:
+                    self.sink.emit(
+                        "waiting",
+                        agent=agent.name,
+                        role=role,
+                        elapsed=round(time.monotonic() - started, 1),
+                    )
+            return future.result()
 
     def _check_technicals(self, active: Sequence[Any]) -> list[dict[str, str]]:
         if len(active) <= 2:
@@ -503,7 +529,7 @@ class Arena:
             transcript_digest=_digest(rounds),
             eliminated=[(e["agent"], e["reason"]) for e in eliminated],
         )
-        res = winner.ask(prompt, self._workdir(winner), self.cfg.timeout, self.cfg.retries)
+        res = self._ask_with_progress(winner, prompt, "最终总结")
         if res.error:
             self.sink.emit("error", message=f"最终总结失败：{res.error}")
             return ""

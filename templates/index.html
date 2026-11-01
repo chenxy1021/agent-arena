@@ -252,6 +252,59 @@
         </article>
       </div>
     </section>
+
+    <aside class="panel inspector">
+      <section class="inspector-now">
+        <div class="labelrow">
+          <label>实时进程</label>
+          <span class="live-tag" :class="{ on: running }">{{ running ? 'LIVE' : 'IDLE' }}</span>
+        </div>
+        <div class="focus-agent">
+          <span class="focus-dot" :style="{ background: activeAgent ? agentColor(activeAgent) : '#5c6b7c' }"></span>
+          <div class="focus-copy">
+            <b>{{ activeAgent || '等待任务' }}</b>
+            <small>{{ activeStage || '还没有运行中的调用' }}</small>
+          </div>
+          <strong class="focus-time">{{ stageElapsedText }}</strong>
+        </div>
+        <div class="stage-progress">
+          <i :style="{ width: stageProgress + '%', background: activeAgent ? agentColor(activeAgent) : 'var(--cyan)' }"></i>
+        </div>
+        <div class="inspector-stats">
+          <span>总用时 <b>{{ elapsedText }}</b></span>
+          <span>单次上限 <b>{{ timeout }}s</b></span>
+          <span>事件 <b>{{ eventCount }}</b></span>
+        </div>
+      </section>
+
+      <section class="activity">
+        <div class="labelrow">
+          <label>思考与调用轨迹</label>
+          <span class="subtle-count">{{ activity.length }}</span>
+        </div>
+        <ol class="activity-list">
+          <li v-if="!activity.length" class="loading">比赛开始后，这里会持续显示调用状态。</li>
+          <li v-for="item in activity" :key="item.id" :class="`kind-${item.kind}`">
+            <time>{{ item.clock }}</time>
+            <span class="activity-kind">{{ activityKind(item.kind) }}</span>
+            <p>{{ item.text }}</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="agent-timings">
+        <label>参赛者状态</label>
+        <ul>
+          <li v-for="p in participants" :key="p.name" :class="{ out: p.state === 'out' }">
+            <span class="dot" :style="{ background: agentColor(p.name) }"></span>
+            <span class="agent-timing-name">{{ p.name }}</span>
+            <small v-if="p.lastRole">{{ p.lastRole }} · {{ Number(p.lastElapsed || 0).toFixed(1) }}s</small>
+            <small v-else>{{ p.state === 'thinking' ? '正在调用' : '等待发言' }}</small>
+          </li>
+          <li v-if="!participants.length" class="loading">暂无参赛者</li>
+        </ul>
+      </section>
+    </aside>
   </main>
 </div>
 <script src="/static/vendor/vue.global.prod.js"></script>
