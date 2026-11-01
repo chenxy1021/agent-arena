@@ -1,8 +1,10 @@
 /* Agent Arena 前端：Vue 3，无构建。 */
 
+/* Muted identity set: one hue per model, low chroma, used only on a
+   dot and a 1px rule. Never as a fill. */
 const PALETTE = [
-  '#3fdcc9', '#f5b544', '#a78bfa', '#ff8fa3', '#6ea8ff',
-  '#4ade80', '#fb923c', '#22d3ee', '#e879f9', '#facc15',
+  '#7fb6a8', '#c9a76a', '#9d93c9', '#c98a8a', '#8fa8c9',
+  '#9fbf87', '#c99a7a', '#7fb3bf', '#b39ac4', '#bdbd8a',
 ];
 
 function agentColor(name) {
@@ -677,9 +679,10 @@ Vue.createApp({
     voteBars(votes) {
       const entries = Object.entries(votes?.counts || {}).sort((a, b) => b[1] - a[1]);
       const max = Math.max(1, ...entries.map((entry) => entry[1]));
-      return entries.map(([name, count]) => ({
+      return entries.map(([name, count], i) => ({
         name,
         count,
+        lead: i === 0 && count > 0,
         width: (count / max) * 100,
       }));
     },

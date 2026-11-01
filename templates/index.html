@@ -4,12 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Arena · 多智能体辩论淘汰赛</title>
+<link rel="preload" href="/static/fonts/PublicSans-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div id="app" v-cloak>
-  <div class="glow"></div>
-
   <header class="topbar">
     <div class="brand">
       <div class="mark">
@@ -18,7 +17,7 @@
         </svg>
       </div>
       <div>
-        <h1>AGENT ARENA</h1>
+        <div class="brand-name">AGENT ARENA</div>
         <p>多模型辩论淘汰赛</p>
       </div>
     </div>
@@ -27,7 +26,6 @@
         <span class="pulse"></span>{{ elapsedText }}
       </span>
       <span class="pill" :data-state="status">{{ statusText }}</span>
-      <span class="pill ghost">第 {{ currentRound }} 轮</span>
     </div>
   </header>
 
@@ -112,9 +110,18 @@
     </aside>
 
     <section class="arena">
+      <header class="arena-head">
+        <h1 class="arena-title" :class="{ 'is-empty': !proposition }">{{ proposition || '还没有设置命题' }}</h1>
+        <div class="arena-meta">
+          <span>{{ statusText }}</span>
+          <span v-if="participants.length">{{ participants.length }} 位参赛</span>
+          <span v-else>等待阵容</span>
+          <span v-if="currentRound">第 {{ currentRound }} 轮</span>
+        </div>
+      </header>
       <div v-if="participants.length" class="live-strip" :data-state="status">
         <div class="live-copy">
-          <span class="live-kicker">{{ replaying ? 'HISTORY' : 'LIVE' }}</span>
+          <span class="run-state">{{ replaying ? '回放' : '实时' }}</span>
           <strong>{{ liveLabel }}</strong>
         </div>
         <div class="live-clock" v-if="winnerName">胜者 <b>{{ winnerName }}</b></div>
@@ -127,7 +134,7 @@
           <span class="dot" :style="{ background: agentColor(p.name) }"></span>
           <span class="name">{{ p.name }}</span>
           <span class="role" :style="{ color: agentColor(p.name) }">
-            {{ p.state === 'out' ? '评审 · 已禁言' : p.state === 'thinking' ? '思考中' : '存活' }}
+            {{ p.state === 'out' ? '评审' : p.state === 'thinking' ? '思考中' : '存活' }}
           </span>
         </div>
       </div>
@@ -135,18 +142,23 @@
       <div ref="stream" class="stream">
         <div v-if="!rounds.length" class="empty">
           <div class="empty-mark">
-            <svg viewBox="0 0 24 24" width="46" height="46" aria-hidden="true">
-              <path d="M12 1.8 21 12l-9 10.2L3 12z" fill="none" stroke="currentColor" stroke-width="1.1"/>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M12 2.6 20.5 12 12 21.4 3.5 12z" fill="none" stroke="currentColor" stroke-width="1.2"/>
             </svg>
           </div>
-          <p>左侧添加两个大模型、填写命题，点「开始比赛」</p>
-          <p class="sub">比赛开始后，模型实时输出、发言、投票和淘汰都会出现在这里。</p>
+          <p>还没有开始比赛</p>
+          <p class="sub">辩论的实时输出、互评、投票和淘汰都会出现在这里。</p>
+          <ul class="empty-steps">
+            <li>在左侧添加两个以上大模型，填写各自的 API 参数</li>
+            <li>写下命题，选择淘汰制或评选制</li>
+            <li>点「开始比赛」，这里会逐字显示每个模型的输出</li>
+          </ul>
         </div>
 
         <section v-for="round in rounds" :key="round.no" class="round">
           <div class="round-head">
-            <span class="round-no">ROUND {{ round.no }}</span>
-            <span class="round-meta">存活 {{ round.alive }} 人 · {{ round.order.join(' → ') }}</span>
+            <span class="round-no">第 {{ round.no }} 轮</span>
+            <span class="round-meta">存活 {{ round.alive }} 人<span class="round-sep"> · </span><span class="round-order">{{ round.order.join(' → ') }}</span></span>
           </div>
           <div class="round-body">
             <article v-for="(speech, idx) in round.speeches" :key="`s-${idx}`"
@@ -186,19 +198,17 @@
               <div class="votes-title">
                 投票结果 · {{ modeLabel(round.votes.vote_mode) }}
               </div>
-              <div v-for="entry in voteBars(round.votes)" :key="entry.name" class="vote-row">
-                <div class="voter" :style="{ color: agentColor(entry.name) }">{{ entry.name }}</div>
+              <div v-for="entry in voteBars(round.votes)" :key="entry.name"
+                class="vote-row" :class="{ lead: entry.lead }">
+                <div class="voter">{{ entry.name }}</div>
                 <div class="bar-wrap">
-                  <div class="bar" :style="{
-                    width: entry.width + '%',
-                    background: agentColor(entry.name),
-                    opacity: .75
-                  }"></div>
+                  <div class="bar" :style="{ width: entry.width + '%' }"></div>
                 </div>
                 <div class="count">{{ entry.count }} 票</div>
               </div>
               <div v-if="!voteBars(round.votes).length" class="vote-line">无有效票</div>
               <div class="vote-detail">
+                <div class="vote-sub">逐票</div>
                 <div v-for="(row, vi) in round.votes.rows" :key="`v-${vi}`" class="vote-line">
                   <span>{{ row.voter }}
                     <span v-if="row.is_judge" class="badge">评审</span>
@@ -210,7 +220,7 @@
             </div>
 
             <div v-if="round.eliminated" class="eliminated">
-              <span>✖ 出局</span>
+              <span class="exit-mark">出局</span>
               <span class="who">{{ round.eliminated.agent }}</span>
               <span>{{ round.eliminated.votes }} 票</span>
               <span class="sub">{{ round.eliminated.tiebreak || '转为评审，禁言但保留投票权' }}</span>
@@ -220,7 +230,9 @@
 
         <article v-if="final" class="winner-card">
           <div class="winner-top">
-            <div class="crown">★</div>
+            <div class="crown" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5l1.2-6.5L2.5 9.4l6.6-.9z" fill="currentColor"/></svg>
+            </div>
             <div>
               <div class="winner-name">{{ final.agent }}</div>
               <div class="winner-sub">最终存活 · 本场胜者</div>
@@ -240,7 +252,7 @@
       <section class="inspector-now">
         <div class="labelrow">
           <label>实时进程</label>
-          <span class="live-tag" :class="{ on: running }">{{ running ? 'LIVE' : 'IDLE' }}</span>
+          <span class="live-tag" :class="{ on: running }">{{ running ? '进行中' : '空闲' }}</span>
         </div>
         <div class="focus-agent">
           <span class="focus-dot" :style="{ background: activeAgent ? agentColor(activeAgent) : '#5c6b7c' }"></span>
