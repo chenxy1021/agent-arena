@@ -25,7 +25,6 @@ class ModelNameRequest(BaseModel):
     base_url: str = Field(min_length=1, max_length=500)
     api_key: str = Field(default="", max_length=500)
     model: str = Field(min_length=1, max_length=200)
-    system_prompt: str = Field(default="", max_length=8000)
     temperature: float | None = Field(default=None, ge=0, le=2)
 
 

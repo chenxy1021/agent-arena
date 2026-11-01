@@ -110,7 +110,7 @@ def suggest_model_name(payload: ModelNameRequest) -> dict[str, str]:
         base_url=base_url,
         api_key=api_key,
         model=model,
-        system_prompt=payload.system_prompt.strip(),
+        system_prompt="",
         temperature=payload.temperature,
     )
     try:

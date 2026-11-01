@@ -47,10 +47,16 @@ class ProviderUrlTest(unittest.TestCase):
 class SuggestDisplayNameTest(unittest.TestCase):
     def test_cleans_model_name_response(self) -> None:
         class FakeAgent:
+            prompt = ""
+
             def ask(self, *_args, **_kwargs):
+                self.prompt = _args[0]
                 return CallResult(text="「星河辩手」", elapsed=0)
 
-        self.assertEqual(suggest_display_name(FakeAgent()), "星河辩手")
+        agent = FakeAgent()
+        self.assertEqual(suggest_display_name(agent), "星河辩手")
+        self.assertNotIn("辩论赛", agent.prompt)
+        self.assertNotIn("2-12", agent.prompt)
 
     def test_reports_connectivity_error(self) -> None:
         class FailingAgent:
