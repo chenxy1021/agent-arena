@@ -57,6 +57,14 @@ class SuggestDisplayNameTest(unittest.TestCase):
         self.assertEqual(suggest_display_name(agent), "星河辩手")
         self.assertNotIn("辩论赛", agent.prompt)
         self.assertNotIn("2-12", agent.prompt)
+        self.assertNotIn("只输出", agent.prompt)
+
+    def test_extracts_name_from_natural_reply(self) -> None:
+        class FakeAgent:
+            def ask(self, *_args, **_kwargs):
+                return CallResult(text="我想叫「云岚」，因为这个名字比较轻。", elapsed=0)
+
+        self.assertEqual(suggest_display_name(FakeAgent()), "云岚")
 
     def test_reports_connectivity_error(self) -> None:
         class FailingAgent:

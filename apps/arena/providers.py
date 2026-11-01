@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+import re
 import socket
 import time
 from types import SimpleNamespace
@@ -177,12 +179,21 @@ class ApiModelAgent:
 
 def suggest_display_name(agent: ApiModelAgent, timeout: float = 30) -> str:
     """Ask a configured model for a short display name; this also tests connectivity."""
-    prompt = "请给自己取一个名字。只输出名字，不要解释。"
+    prompt = random.choice((
+        "给自己起个名字。",
+        "你希望自己叫什么？",
+        "现在给自己取一个名字。",
+        "用一个名字代表你。",
+    ))
     result = agent.ask(prompt, timeout=timeout, retries=0)
     if result.error:
         raise ValueError(f"连通性测试失败：{result.error}")
-    first_line = next((line.strip() for line in result.text.splitlines() if line.strip()), "")
-    name = first_line.strip("\"'“”‘’《》「」【】 ").removeprefix("名称：").strip()
+    raw = result.text.strip()
+    quoted = re.search(r"[「『“\"']([^」』”\"']{1,40})[」』”\"']", raw)
+    named = re.search(r"(?:我叫|名字是|命名为)[:：\s]*([^\s，。,.!?！？]{1,40})", raw)
+    first_line = next((line.strip() for line in raw.splitlines() if line.strip()), "")
+    name = (quoted or named).group(1) if (quoted or named) else first_line
+    name = name.strip("\"'“”‘’《》「」『』【】 ").removeprefix("名称：").strip()
     if not name:
         raise ValueError("模型返回了空名称")
     return name[:40]

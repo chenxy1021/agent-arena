@@ -111,7 +111,7 @@ def suggest_model_name(payload: ModelNameRequest) -> dict[str, str]:
         api_key=api_key,
         model=model,
         system_prompt="",
-        temperature=payload.temperature,
+        temperature=1.0,
     )
     try:
         return {"name": suggest_display_name(agent)}
