@@ -24,14 +24,15 @@ def build_speech_prompt(
     vote_mode: str = "eliminate",
 ) -> str:
     """Build an independent or cross-round critique prompt."""
+    vote_schedule = "第一轮只发表观点，不投票；从第二轮结束起" if round_no == 1 else "本轮结束后"
     if vote_mode == "support":
         rule_line = (
-            "每轮结束，所有参赛者（包括已出局转为评审的）投票选出「最该留下」的一人，"
+            f"{vote_schedule}，所有参赛者（包括已出局转为评审的）投票选出「最该留下」的一人，"
             "得票最少者出局。所以你的发言要争取别人的认可票。"
         )
     else:
         rule_line = (
-            "每轮结束，所有参赛者（包括已出局转为评审的）投票淘汰「最没用」的一人，"
+            f"{vote_schedule}，所有参赛者（包括已出局转为评审的）投票淘汰「最没用」的一人，"
             "得票最多者出局。所以你的发言要经得起别人挑刺。"
         )
 

@@ -96,5 +96,25 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
         self.assertNotIn("本轮已有发言", prompt)
 
 
+class TournamentScheduleTest(unittest.TestCase):
+    def test_first_round_has_no_vote_and_second_round_starts_voting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            result = Arena(
+                [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                sink=sink,
+            ).run()
+
+        self.assertEqual(result.rounds[0].votes, [])
+        self.assertIsNone(result.rounds[0].eliminated)
+        self.assertTrue(result.rounds[1].votes)
+        self.assertIsNotNone(result.rounds[1].eliminated)
+        voting_rounds = [
+            event["round_no"] for event in sink.events if event["kind"] == "voting_start"
+        ]
+        self.assertEqual(voting_rounds, [2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -59,7 +59,7 @@
               <small>投最该留，票少者出局</small>
             </button>
           </div>
-          <p class="form-note">出局后立即禁言，转为评委席，仍参与每一轮投票。</p>
+          <p class="form-note">首轮只发表观点，不投票；从第二轮结束起开始投票淘汰。</p>
 
           <div class="timing-row">
             <label for="timeout">单次发言限时</label>
@@ -250,7 +250,9 @@
 
                 <template v-else>
                   <div class="ledger-title">本轮记录</div>
-                  <div class="ledger-empty">本轮没有可展示的计票记录。</div>
+                  <div class="ledger-empty">
+                    {{ round.no === 1 ? '首轮只发表观点，不进行投票。' : '本轮没有可展示的计票记录。' }}
+                  </div>
                 </template>
               </aside>
             </div>

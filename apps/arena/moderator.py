@@ -1,8 +1,8 @@
-"""赛制核心：独立首轮 → 跨轮点评 → 全员投票 → 淘汰 → 直到剩一人。
+"""赛制核心：独立首轮 → 跨轮点评 → 第二轮起投票 → 淘汰 → 直到剩一人。
 
 规则要点（改动请保持语义一致）：
 1. 第一轮所有模型独立发言；第二轮起只点评上一轮，且看不到本轮其他模型输出；
-2. 投票由「存活者 + 已出局的评审」一起投，评审不再发言但保留投票权；
+2. 第一轮不投票；从第二轮结束起，由「存活者 + 已出局的评审」一起投票；
 3. 出局规则可切换：
    - eliminate（默认）：投最没用的，票多者出局；
    - support：投最该留下的，票少者出局；
@@ -68,7 +68,7 @@ class RoundRecord:
 @dataclass
 class ArenaConfig:
     proposition: str
-    max_rounds: int = 0          # 0 = 自动（人数 - 1）
+    max_rounds: int = 0          # 0 = 自动（人数，首轮不投票）
     timeout: float = 240.0       # 单次调用超时（秒）
     out_dir: Path = Path("runs")
     retries: int = 1
@@ -228,7 +228,7 @@ class Arena:
         active = list(self.agents)
         eliminated: list[dict[str, Any]] = []
         rounds: list[RoundRecord] = []
-        max_rounds = cfg.max_rounds or max(len(active) - 1, 1)
+        max_rounds = cfg.max_rounds or max(len(active), 1)
 
         self.sink.emit(
             "run_start",
@@ -285,6 +285,11 @@ class Arena:
                 rounds.append(record)
                 if len(active) <= 1:
                     break
+                continue
+
+            # 首轮只发言、不投票；从第二轮结束起再进入裁决。
+            if rnd == 1:
+                rounds.append(record)
                 continue
 
             # ---- 3. 全员投票：存活者 + 评审团 ----

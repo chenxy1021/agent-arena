@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--repeat", type=int, default=0,
         help="每个 CLI 起几个实例；0=自动（凑够 4 人，保证投票有第三方）",
     )
-    p.add_argument("--max-rounds", type=int, default=0, help="最多几轮（默认 人数-1）")
+    p.add_argument("--max-rounds", type=int, default=0, help="最多几轮（默认 人数，首轮不投票）")
     p.add_argument("--timeout", type=float, default=240, help="单次调用超时秒数（默认 240）")
     p.add_argument("--out", default="runs", help="战报输出目录（默认 ./runs）")
     p.add_argument("--custom", action="append", default=[], metavar="NAME=CMD",
