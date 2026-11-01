@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from config import settings
 
 from . import database
-from .schemas import ModelCreate, StartRun
+from .schemas import ModelCreate, ModelUpdate, StartRun
 from .services import manager
 
 router = APIRouter()
@@ -58,6 +58,32 @@ def remove_model(model_id: int) -> dict[str, bool]:
     if not database.delete_model(model_id):
         raise HTTPException(status_code=404, detail="模型配置不存在")
     return {"deleted": True}
+
+
+@router.put("/models/{model_id}")
+def update_model(model_id: int, payload: ModelUpdate) -> dict[str, Any]:
+    name = payload.name.strip()
+    base_url = payload.base_url.strip()
+    api_key = payload.api_key.strip()
+    model = payload.model.strip()
+    if not name or not model:
+        raise HTTPException(status_code=400, detail="名称和模型 ID 不能为空")
+    if not base_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+    config = database.update_model(
+        model_id,
+        name=name,
+        base_url=base_url,
+        api_key=api_key or None,
+        model=model,
+        system_prompt=payload.system_prompt.strip(),
+        temperature=payload.temperature,
+    )
+    if not config:
+        raise HTTPException(status_code=404, detail="模型配置不存在")
+    config.pop("api_key", None)
+    config["has_api_key"] = True
+    return config
 
 
 @router.post("/runs", status_code=201)

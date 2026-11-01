@@ -16,6 +16,10 @@ class ModelCreate(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
 
 
+class ModelUpdate(ModelCreate):
+    api_key: str = Field(default="", max_length=500)
+
+
 class StartRun(BaseModel):
     proposition: str = Field(min_length=1, max_length=2000)
     vote_mode: Literal["eliminate", "support"] = "eliminate"

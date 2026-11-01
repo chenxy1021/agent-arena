@@ -105,6 +105,42 @@ def get_model(model_id: int, db_path: Path | None = None) -> dict[str, Any] | No
     return dict(row) if row else None
 
 
+def update_model(
+    model_id: int,
+    *,
+    name: str,
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    system_prompt: str = "",
+    temperature: float | None = None,
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    current = get_model(model_id, db_path=db_path)
+    if not current:
+        return None
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE model_configs
+            SET name = ?, base_url = ?, api_key = ?, model = ?,
+                system_prompt = ?, temperature = ?, updated_ts = ?
+            WHERE id = ?
+            """,
+            (
+                name,
+                base_url,
+                api_key or current["api_key"],
+                model,
+                system_prompt,
+                temperature,
+                time.time(),
+                model_id,
+            ),
+        )
+    return get_model(model_id, db_path=db_path)
+
+
 def delete_model(model_id: int, db_path: Path | None = None) -> bool:
     init_db(db_path)
     with _connect(db_path) as conn:

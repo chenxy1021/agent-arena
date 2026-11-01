@@ -73,6 +73,7 @@ Vue.createApp({
       modelsLoading: true,
       showModelModal: false,
       savingModel: false,
+      editingModelId: 0,
       modelForm: {
         name: '',
         base_url: '',
@@ -265,20 +266,24 @@ Vue.createApp({
       }
     },
 
-    openModelModal() {
+    openModelModal(model = null) {
       this.modelForm = {
-        name: '',
-        base_url: '',
+        name: model?.name || '',
+        base_url: model?.base_url || '',
         api_key: '',
-        model: '',
-        system_prompt: '',
-        temperature: '',
+        model: model?.model || '',
+        system_prompt: model?.system_prompt || '',
+        temperature: model?.temperature ?? '',
       };
+      this.editingModelId = model?.id || 0;
+      this.hint = '';
       this.showModelModal = true;
     },
 
     closeModelModal() {
-      if (!this.savingModel) this.showModelModal = false;
+      if (this.savingModel) return;
+      this.showModelModal = false;
+      this.editingModelId = 0;
     },
 
     async saveModel() {
@@ -286,19 +291,23 @@ Vue.createApp({
       this.savingModel = true;
       this.hint = '';
       try {
-        const res = await fetch('/api/models', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...this.modelForm,
-            temperature: this.modelForm.temperature === ''
-              ? null
-              : Number(this.modelForm.temperature),
-          }),
-        });
+        const res = await fetch(
+          this.editingModelId ? `/api/models/${this.editingModelId}` : '/api/models',
+          {
+            method: this.editingModelId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...this.modelForm,
+              temperature: this.modelForm.temperature === ''
+                ? null
+                : Number(this.modelForm.temperature),
+            }),
+          },
+        );
         const data = await res.json();
         if (!res.ok) throw new Error(cleanError(data));
         this.showModelModal = false;
+        this.editingModelId = 0;
         await this.loadModels();
       } catch (err) {
         this.hint = err.message;

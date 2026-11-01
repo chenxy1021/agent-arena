@@ -76,12 +76,25 @@ class ModelDatabaseTest(unittest.TestCase):
             )
             rows = database.list_models(db_path=db_path)
             full = database.get_model(created["id"], db_path=db_path)
+            updated = database.update_model(
+                created["id"],
+                name="模型B",
+                base_url="https://example.com/v2",
+                api_key=None,
+                model="model-b",
+                system_prompt="详细回答",
+                temperature=0.8,
+                db_path=db_path,
+            )
             deleted = database.delete_model(created["id"], db_path=db_path)
 
         self.assertEqual(rows[0]["name"], "模型A")
         self.assertNotIn("api_key", rows[0])
         self.assertEqual(rows[0]["has_api_key"], 1)
         self.assertEqual(full["api_key"], "secret-key")
+        self.assertEqual(updated["name"], "模型B")
+        self.assertEqual(updated["api_key"], "secret-key")
+        self.assertEqual(updated["temperature"], 0.8)
         self.assertTrue(deleted)
 
 

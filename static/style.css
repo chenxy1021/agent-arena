@@ -359,8 +359,13 @@ button { color: inherit; }
   white-space: nowrap;
 }
 
-.row-delete {
+.row-actions {
   margin-left: auto;
+  display: flex;
+  gap: 12px;
+}
+
+.row-action {
   padding: 2px 0;
   border: 0;
   border-bottom: 1px solid transparent;
@@ -371,7 +376,7 @@ button { color: inherit; }
   cursor: pointer;
 }
 
-.row-delete:hover { color: var(--red); border-bottom-color: currentColor; }
+.row-action:hover { color: var(--red); border-bottom-color: currentColor; }
 
 .empty-row,
 .empty-copy,

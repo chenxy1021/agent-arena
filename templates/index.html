@@ -86,8 +86,12 @@
                 <b>{{ m.name }}</b>
                 <small>{{ m.model }}</small>
               </span>
-              <button type="button" class="row-delete" title="删除模型"
-                @click.stop="deleteModel(m)">删除</button>
+              <span class="row-actions">
+                <button type="button" class="row-action" title="修改模型配置"
+                  @click.stop="openModelModal(m)">修改</button>
+                <button type="button" class="row-action row-delete" title="删除模型"
+                  @click.stop="deleteModel(m)">删除</button>
+              </span>
             </li>
           </ul>
           <p v-if="!modelsLoading && !models.length" class="empty-copy">
@@ -323,7 +327,7 @@
       <div class="modal-head">
         <div>
           <span class="section-kicker">参赛登记</span>
-          <h2>登记参赛大模型</h2>
+          <h2>{{ editingModelId ? '修改模型配置' : '登记参赛大模型' }}</h2>
           <p>兼容 OpenAI 的 <code>/chat/completions</code> 接口。密钥只保存在本机。</p>
         </div>
         <button type="button" class="modal-close" @click="closeModelModal">关闭</button>
@@ -337,8 +341,8 @@
             placeholder="https://api.openai.com/v1">
         </label>
         <label>API Key
-          <input v-model.trim="modelForm.api_key" required type="password"
-            autocomplete="off" placeholder="sk-...">
+          <input v-model.trim="modelForm.api_key" :required="!editingModelId" type="password"
+            autocomplete="off" :placeholder="editingModelId ? '留空则保留原 Key' : 'sk-...'">
         </label>
         <label>模型 ID
           <input v-model.trim="modelForm.model" required maxlength="200"
@@ -359,7 +363,7 @@
           取消
         </button>
         <button type="submit" class="primary-button" :disabled="savingModel">
-          {{ savingModel ? '登记中…' : '登记模型' }}
+          {{ savingModel ? '保存中…' : (editingModelId ? '保存修改' : '登记模型') }}
         </button>
       </div>
     </form>

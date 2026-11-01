@@ -35,6 +35,8 @@ uv run uvicorn config.asgi:app --reload
 
 接口需要兼容 OpenAI 的 `POST /chat/completions`，并支持流式返回。API Key 只保存在本机 `arena.db`，列表接口不会返回 Key。
 
+模型登记后可在列表中点击「修改」；API Key 留空会保留原来的密钥。
+
 ## 界面
 
 前端采用「赛程纸」布局：空闲时是赛事登记表，开赛后按轮次装订成赛程纸。实时事件通过 SSE 显示在轮次纸的现场记录区，票数使用中文「正」字计票，历史提问保存在 SQLite 并可从赛事档案回放。
@@ -93,6 +95,7 @@ uv run uvicorn config.asgi:app --reload
 
 - `GET /api/models`：读取模型配置，不返回 API Key。
 - `POST /api/models`：添加模型。
+- `PUT /api/models/{id}`：修改模型配置，API Key 留空时保留原密钥。
 - `DELETE /api/models/{id}`：删除模型。
 - `POST /api/runs`：启动比赛。
 - `GET /api/runs/active`：获取正在运行的比赛。
