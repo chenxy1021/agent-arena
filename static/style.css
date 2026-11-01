@@ -4642,8 +4642,8 @@ body { overflow-x: hidden; }
 .record-round > header {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0 16px;
-  align-items: baseline;
+  gap: 5px 16px;
+  align-items: start;
   margin-bottom: 24px;
 }
 
