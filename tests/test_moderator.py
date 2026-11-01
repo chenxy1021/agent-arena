@@ -6,7 +6,14 @@ from unittest.mock import patch
 from apps.arena.adapters import CallResult
 from apps.arena.mock import MockAgent
 from apps.arena.events import RecordingSink
-from apps.arena.moderator import Arena, ArenaConfig, RoundRecord, Speech, Vote
+from apps.arena.moderator import (
+    Arena,
+    ArenaConfig,
+    RoundRecord,
+    Speech,
+    Vote,
+    _prior_speeches_for,
+)
 from apps.arena import prompts
 
 
@@ -139,9 +146,28 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
         self.assertIn("回答最好的一个模型", prompt)
         self.assertIn("回答最差的一个模型", prompt)
         self.assertIn("最好和最差不能是同一个模型", prompt)
+        self.assertIn("已出局模型不再参与点评比较", prompt)
         self.assertIn("不要逐个模型点评", prompt)
         self.assertIn("主要篇幅放在你自己的新观点", prompt)
         self.assertNotIn("本轮已有发言", prompt)
+
+    def test_prior_speeches_exclude_eliminated_models(self) -> None:
+        rounds = [
+            RoundRecord(
+                no=1,
+                order=["模型A", "模型B", "模型C"],
+                speeches=[
+                    Speech(1, "模型A", "独立发言", "A 的论点", 0),
+                    Speech(1, "模型B", "独立发言", "B 的论点", 0),
+                    Speech(1, "模型C", "独立发言", "C 的论点", 0),
+                ],
+            )
+        ]
+        current = [MockAgent("模型A"), MockAgent("模型C")]
+
+        prior = _prior_speeches_for(current, rounds)
+
+        self.assertEqual(prior, [("模型A", "A 的论点"), ("模型C", "C 的论点")])
 
 
 class VoteProgressEventTest(unittest.TestCase):

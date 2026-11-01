@@ -113,6 +113,18 @@ def _clean_candidate(raw: str) -> str:
     return raw.strip().strip("\"'“”`.,，。:：")
 
 
+def _prior_speeches_for(
+    active: Sequence[Any], rounds: Sequence[RoundRecord]
+) -> list[tuple[str, str]]:
+    alive = {agent.name for agent in active}
+    return [
+        (speech.agent, speech.text)
+        for round_record in rounds
+        for speech in round_record.speeches
+        if speech.agent in alive
+    ]
+
+
 def parse_vote(text: str, valid: Sequence[str], voter: str) -> tuple[str | None, str]:
     """从模型输出里解析投票。返回 (target, reason)，target 为 None 表示解析失败。"""
     pool = [v for v in valid if v != voter]
@@ -251,11 +263,7 @@ class Arena:
             record.order = [a.name for a in order]
             self.sink.emit("round_start", no=rnd, alive=len(active), order=record.order)
 
-            prior_speeches = [
-                (s.agent, s.text)
-                for round_record in rounds
-                for s in round_record.speeches
-            ]
+            prior_speeches = _prior_speeches_for(active, rounds)
 
             # ---- 1. 独立发言 / 综合此前讨论并提出新观点 ----
             for agent in order:
