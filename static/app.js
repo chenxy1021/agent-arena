@@ -170,6 +170,9 @@ Vue.createApp({
         })
         .sort((a, b) => b.seq - a.seq);
     },
+    roundsNewestFirst() {
+      return [...this.rounds].sort((a, b) => b.no - a.no);
+    },
     scoreByName() {
       const scores = {};
       for (const participant of this.participants) scores[participant.name] = 0;

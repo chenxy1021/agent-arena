@@ -217,7 +217,7 @@
           <p>{{ running ? '舞台已经亮起，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
         </div>
 
-        <section v-for="round in rounds" :key="round.no" class="round-paper"
+        <section v-for="round in roundsNewestFirst" :key="round.no" class="round-paper"
           :class="{ current: round.no === currentRound }">
           <aside class="round-index">
             <span><rolling-number :text="roundNo(round.no)" /></span>
