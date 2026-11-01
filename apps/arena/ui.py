@@ -18,7 +18,7 @@ MAGENTA = "\033[35m"
 BLUE = "\033[34m"
 
 VOTE_MODE_LABEL = {
-    "eliminate": "淘汰制：投最没用的，票多者出局",
+    "eliminate": "淘汰制：投观点最站不住的，票多者出局",
     "support": "评选制：投最该留下的，票少者出局",
 }
 

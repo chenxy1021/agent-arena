@@ -736,6 +736,7 @@ button { color: inherit; }
 .round-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
 }
 
 .speech-column {
@@ -748,6 +749,15 @@ button { color: inherit; }
   padding: 22px 20px;
   border-left: 1px solid var(--line-strong);
   background: rgba(233, 232, 226, .35);
+}
+
+@media (min-width: 1001px) {
+  .round-paper.current .decision-column {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
 }
 
 .speech {
@@ -884,6 +894,86 @@ button { color: inherit; }
   padding-top: 13px;
   border-top: 1px solid var(--line-strong);
 }
+
+.vote-stage {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.vote-stage:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.vote-stage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.vote-stage-head b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vote-stage-head span {
+  color: var(--red);
+  font: 10px/1.4 var(--mono);
+  letter-spacing: .06em;
+}
+
+.live-vote-stage {
+  padding: 12px 0 2px;
+  border-top: 2px solid var(--red);
+}
+
+.live-vote-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--gray);
+  font-size: 11px;
+}
+
+.live-vote-row small,
+.vote-error {
+  margin-left: 5px;
+  color: var(--red);
+}
+
+.live-vote-row b {
+  color: var(--ink);
+  font-weight: 500;
+  text-align: right;
+}
+
+.tiebreak-trail {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--red);
+  background: rgba(176, 52, 42, .04);
+}
+
+.tiebreak-step b,
+.tiebreak-step span {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 11px;
+}
+
+.tiebreak-step b { color: var(--red); }
+.tiebreak-step span { color: var(--ink); }
+.tiebreak-step p { margin: 3px 0 0; color: var(--gray); font-size: 10px; line-height: 1.55; }
 
 .vote-record {
   padding: 9px 0;
@@ -1258,6 +1348,9 @@ button { color: inherit; }
   .round-columns { grid-template-columns: minmax(0, 1fr); }
 
   .decision-column {
+    position: static;
+    max-height: none;
+    overflow: visible;
     border-top: 1px solid var(--line-strong);
     border-left: 0;
   }

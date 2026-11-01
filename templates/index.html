@@ -50,7 +50,7 @@
               @click="mode = 'eliminate'">
               <span class="rule-stamp">已选</span>
               <b>淘汰制</b>
-              <small>投最没用，票多者出局</small>
+              <small>投观点最站不住，票多者出局</small>
             </button>
             <button type="button" class="rule-card" :class="{ active: mode === 'support' }"
               @click="mode = 'support'">
@@ -162,7 +162,8 @@
           <p>{{ running ? '正在登记本轮参赛者，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
         </div>
 
-        <section v-for="round in rounds" :key="round.no" class="round-paper">
+        <section v-for="round in rounds" :key="round.no" class="round-paper"
+          :class="{ current: round.no === currentRound }">
           <aside class="round-index">
             <span>{{ roundNo(round.no) }}</span>
             <small>轮次</small>
@@ -218,51 +219,82 @@
               </div>
 
               <aside class="decision-column">
-                <template v-if="round.votes">
-                  <div class="ledger-title">投票</div>
-                  <div v-for="entry in voteBars(round.votes)" :key="entry.name"
-                    class="vote-tally-row" :class="{ lead: entry.lead }">
-                    <span class="vote-name">{{ entry.name }}</span>
-                    <tally-marks :count="entry.count"
-                      :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
-                  </div>
-                  <div v-if="!voteBars(round.votes).length" class="ledger-empty">无有效票</div>
+                <template v-if="round.votes || round.tiebreakSteps?.length || (round.no === currentRound && running)">
+                  <div class="ledger-title">投票与裁决</div>
 
-                  <div class="vote-detail-head">逐票记录</div>
-                  <div v-for="(row, vi) in round.votes.rows" :key="`v-${vi}`" class="vote-record">
-                    <div class="vote-record-main">
-                      <span>
-                        {{ row.voter }}
-                        <small v-if="row.is_judge">评委</small>
-                        <small v-if="row.stage && row.stage !== 'main'">加赛</small>
-                      </span>
-                      <b>投给 {{ row.target || '未投' }}</b>
+                  <div v-if="round.tiebreakSteps?.length" class="tiebreak-trail">
+                    <div v-for="step in round.tiebreakSteps" :key="`tb-${step.attempt}`"
+                      class="tiebreak-step" :class="{ resolved: step.status === 'decided' }">
+                      <b>第 {{ step.attempt }} 次加赛</b>
+                      <span>{{ step.agents?.join('、') }}</span>
+                      <p v-if="step.removed?.length">移出投票人：{{ step.removed.join('、') }}</p>
+                      <p v-else>同票者重新发言后，由{{ step.voters }} 位投票人重投。</p>
                     </div>
-                    <p>{{ row.reason || row.error || '未说明理由' }}</p>
                   </div>
-                </template>
 
-                <template v-else-if="round.no === currentRound && running">
-                  <div class="ledger-title">现场记录</div>
-                  <div v-if="modelStreams.length" class="live-output-list">
-                    <article v-for="stream in modelStreams" :key="stream.agent" class="live-output">
-                      <header>
-                        <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
-                        <span>{{ stream.role }}</span>
-                      </header>
-                      <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
-                    </article>
+                  <div v-for="group in voteStageGroups(round.votes)" :key="group.stage"
+                    class="vote-stage">
+                    <div class="vote-stage-head">
+                      <b>{{ group.label }}</b>
+                      <span>{{ group.rows.length }} 票</span>
+                    </div>
+                    <div v-for="entry in voteBars(group.counts)" :key="`${group.stage}-${entry.name}`"
+                      class="vote-tally-row" :class="{ lead: entry.lead }">
+                      <span class="vote-name">{{ entry.name }}</span>
+                      <tally-marks :count="entry.count"
+                        :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
+                    </div>
+                    <div v-if="!voteBars(group.counts).length" class="ledger-empty">无有效票</div>
+
+                    <div class="vote-detail-head">逐票记录</div>
+                    <div v-for="(row, vi) in group.rows" :key="`v-${group.stage}-${vi}`" class="vote-record">
+                      <div class="vote-record-main">
+                        <span>
+                          {{ row.voter }}
+                          <small v-if="row.is_judge">评委</small>
+                          <small v-if="row.stage && row.stage !== 'main'">{{ voteStageLabel(row.stage) }}</small>
+                        </span>
+                        <b>投给 {{ row.target || '未投' }}</b>
+                      </div>
+                      <p>{{ row.reason || row.error || '未说明理由' }}</p>
+                    </div>
                   </div>
-                  <div v-else class="ledger-empty">等待模型返回本轮发言。</div>
 
-                  <div v-if="activity.length" class="trace-head">赛务轨迹</div>
-                  <ol v-if="activity.length" class="trace-list">
-                    <li v-for="item in activity.slice(0, 8)" :key="item.id">
-                      <time>{{ item.clock }}</time>
-                      <span>{{ activityKind(item.kind) }}</span>
-                      <p>{{ item.text }}</p>
-                    </li>
-                  </ol>
+                  <div v-if="liveVotingRows(round).length" class="vote-stage live-vote-stage">
+                    <div class="vote-stage-head">
+                      <b>{{ currentVoteStage(round) }}</b>
+                      <span>收票中</span>
+                    </div>
+                    <div v-for="row in liveVotingRows(round)" :key="`live-${row.voter}`"
+                      class="live-vote-row">
+                      <span>{{ row.voter }}<small v-if="row.is_judge">评委</small></span>
+                      <b v-if="row.status === 'done'">投给 {{ row.target }}</b>
+                      <b v-else-if="row.status === 'error'" class="vote-error">投票失败</b>
+                      <b v-else>正在判断…</b>
+                    </div>
+                  </div>
+
+                  <template v-if="round.no === currentRound && running">
+                    <div class="trace-head">现场记录</div>
+                    <div v-if="modelStreams.length" class="live-output-list">
+                      <article v-for="stream in modelStreams" :key="stream.agent" class="live-output">
+                        <header>
+                          <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
+                          <span>{{ stream.role }}</span>
+                        </header>
+                        <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
+                      </article>
+                    </div>
+                    <div v-else class="ledger-empty">等待模型返回本轮信息。</div>
+
+                    <ol v-if="activity.length" class="trace-list">
+                      <li v-for="item in activity.slice(0, 8)" :key="item.id">
+                        <time>{{ item.clock }}</time>
+                        <span>{{ activityKind(item.kind) }}</span>
+                        <p>{{ item.text }}</p>
+                      </li>
+                    </ol>
+                  </template>
                 </template>
 
                 <template v-else>

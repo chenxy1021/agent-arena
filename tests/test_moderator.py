@@ -136,10 +136,32 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
         self.assertIn("【前几轮完整发言】", prompt)
         self.assertIn("上一轮观点", prompt)
         self.assertIn("另一个上一轮观点", prompt)
-        self.assertIn("整体优点和不足", prompt)
+        self.assertIn("回答最好的一个模型", prompt)
+        self.assertIn("回答最差的一个模型", prompt)
+        self.assertIn("最好和最差不能是同一个模型", prompt)
         self.assertIn("不要逐个模型点评", prompt)
         self.assertIn("主要篇幅放在你自己的新观点", prompt)
         self.assertNotIn("本轮已有发言", prompt)
+
+
+class VoteProgressEventTest(unittest.TestCase):
+    def test_each_voter_emits_thinking_and_done_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            arena = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                sink=sink,
+            )
+            a, b = arena.agents
+
+            votes = arena._collect_votes([a, b], [a, b], [], [], 2)
+
+        self.assertEqual(len(votes), 2)
+        progress = [event for event in sink.events if event["kind"] == "voting"]
+        self.assertEqual(len(progress), 4)
+        self.assertEqual({event["status"] for event in progress}, {"thinking", "done"})
+        self.assertTrue(all(event["stage"] == "main" for event in progress))
 
 
 class TournamentScheduleTest(unittest.TestCase):

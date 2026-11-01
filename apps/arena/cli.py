@@ -26,7 +26,7 @@ EPILOG = """\
   python arena.py "命题" --custom "myai=mycli chat --prompt {prompt}"
 
 出局规则（--vote-mode）：
-  eliminate  投「最没用」，票最多者出局（默认）
+  eliminate  投「观点最站不住」，票最多者出局（默认）
   support    投「最该留下」，票最少者出局
 出局者立即禁言，但会转为评审，继续参与后续每一轮投票。
 """
@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mock-fail-rate", type=float, default=0.0, help="Mock 模式下注入调用失败的概率")
     p.add_argument(
         "--vote-mode", choices=["eliminate", "support"], default="eliminate",
-        help="出局规则：eliminate=投最没用票多出局（默认）；support=投最该留票少出局",
+        help="出局规则：eliminate=投观点最站不住票多出局（默认）；support=投最该留票少出局",
     )
     p.add_argument(
         "--repeat", type=int, default=0,

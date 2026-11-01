@@ -10,9 +10,17 @@ if TYPE_CHECKING:  # 避免与 moderator 循环导入
     from .moderator import ArenaResult
 
 MODE_LABEL = {
-    "eliminate": "淘汰制（投最没用的，票多者出局）",
+    "eliminate": "淘汰制（投观点最站不住的，票多者出局）",
     "support": "评选制（投最该留下的，票少者出局）",
 }
+
+
+def _stage_note(stage: str) -> str:
+    if stage == "main":
+        return ""
+    if stage.startswith("tiebreak-"):
+        return f"（第 {stage.removeprefix('tiebreak-')} 次加赛）"
+    return f"（{stage}）"
 
 
 def _md(result: ArenaResult) -> str:
@@ -49,7 +57,7 @@ def _md(result: ArenaResult) -> str:
             add("| 投票者 | 投给 | 理由 |")
             add("| --- | --- | --- |")
             for v in r.votes:
-                marks = ("（评审）" if v.is_judge else "") + ("（加赛）" if v.stage != "main" else "")
+                marks = ("（评审）" if v.is_judge else "") + _stage_note(v.stage)
                 who = v.voter + marks
                 add(f"| {who} | {v.target or '弃权'} | {(v.reason or v.error or '').replace('|', '/')} |")
             add("")

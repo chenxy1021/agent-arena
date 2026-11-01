@@ -121,7 +121,13 @@ Vue.createApp({
       return this.models.filter((m) => m.checked).map((m) => m.id);
     },
     modelStreams() {
-      return Object.values(this.modelOutputs).sort((a, b) => b.seq - a.seq);
+      return Object.values(this.modelOutputs)
+        .filter((stream) => stream.round === this.currentRound)
+        .filter((stream) => {
+          const participant = this.participants.find((item) => item.name === stream.agent);
+          return !participant || participant.state !== 'out';
+        })
+        .sort((a, b) => b.seq - a.seq);
     },
     scoreByName() {
       const scores = {};
@@ -209,7 +215,9 @@ Vue.createApp({
         waiting: '等待',
         speech: '发言',
         voting_start: '投票',
+        voting: '投票中',
         tiebreak: '加赛',
+        tiebreak_result: '加赛计票',
         votes: '计票',
         elimination: '淘汰',
         technical_exit: '退出',
@@ -527,6 +535,9 @@ Vue.createApp({
         order: [],
         speeches: [],
         thinking: [],
+        voting: [],
+        votingStage: null,
+        tiebreakSteps: [],
         exits: [],
         votes: null,
         eliminated: null,
@@ -545,6 +556,7 @@ Vue.createApp({
     handleEvent(ev) {
       switch (ev.kind) {
         case 'run_start':
+          this.modelOutputs = {};
           this.participants = (ev.agents || []).map((a) => ({
             name: a.name,
             label: a.label,
@@ -558,6 +570,7 @@ Vue.createApp({
 
         case 'round_start': {
           const round = this.ensureRound(ev.no);
+          this.modelOutputs = {};
           round.alive = ev.alive;
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
@@ -577,6 +590,7 @@ Vue.createApp({
               agent: ev.agent,
               role: ev.role,
               text: '',
+              round: this.currentRound || 1,
               seq: ++this.modelStreamSeq,
             },
           };
@@ -592,8 +606,10 @@ Vue.createApp({
             agent: ev.agent,
             role: ev.role,
             text: '',
+            round: this.currentRound || 1,
             seq: ++this.modelStreamSeq,
           };
+          current.round = this.currentRound || current.round;
           current.text = `${current.text}${ev.text || ''}`.slice(-16000);
           this.modelOutputs = { ...this.modelOutputs, [ev.agent]: current };
           this.$nextTick(() => this.scrollOutput(ev.agent));
@@ -636,23 +652,69 @@ Vue.createApp({
           break;
         }
 
-        case 'voting_start':
-          this.beginStage('', `${ev.voters} 位投票者正在并行投票`);
-          this.liveLabel = `第 ${ev.round_no} 轮 · 全员投票中`;
+        case 'voting_start': {
+          const round = this.ensureRound(ev.round_no || this.currentRound || 1);
+          round.votingStage = {
+            stage: ev.stage || 'main',
+            voters: ev.voters || 0,
+            candidates: ev.candidates || [],
+          };
+          this.beginStage('', `${ev.voters} 位投票者正在判断本轮发言`);
+          this.liveLabel = `第 ${ev.round_no} 轮 · ${this.voteStageLabel(ev.stage)}：${ev.voters} 位投票者`;
           break;
+        }
 
-        case 'tiebreak':
+        case 'voting': {
+          const round = this.ensureRound(ev.round_no || this.currentRound || 1);
+          const index = round.voting.findIndex(
+            (item) => item.stage === ev.stage && item.voter === ev.voter,
+          );
+          const row = index >= 0 ? round.voting[index] : {};
+          Object.assign(row, ev);
+          if (index >= 0) round.voting.splice(index, 1, row);
+          else round.voting.push(row);
+          if (ev.status === 'thinking') {
+            this.liveLabel = `${ev.voter} 正在判断谁的发言最站得住`;
+            this.beginStage(ev.voter, `${this.voteStageLabel(ev.stage)}：正在判断`);
+          } else if (ev.status === 'done') {
+            this.liveLabel = `${ev.voter} 已投给 ${ev.target}`;
+            this.beginStage(ev.voter, `${this.voteStageLabel(ev.stage)}：已投票`);
+            this.pushActivity('voting', `${ev.voter} 投给 ${ev.target}`, ev.voter);
+          } else {
+            this.liveLabel = `${ev.voter} 投票失败`;
+            this.beginStage(ev.voter, `${this.voteStageLabel(ev.stage)}：投票失败`);
+            this.pushActivity('voting', `${ev.voter} 投票失败：${ev.error || '未知错误'}`, ev.voter);
+          }
+          break;
+        }
+
+        case 'tiebreak': {
+          const round = this.ensureRound(ev.round_no || this.currentRound || 1);
+          const index = round.tiebreakSteps.findIndex((item) => item.attempt === ev.attempt);
+          const step = index >= 0 ? round.tiebreakSteps[index] : {};
+          Object.assign(step, ev);
+          if (index >= 0) round.tiebreakSteps.splice(index, 1, step);
+          else round.tiebreakSteps.push(step);
           this.beginStage('', `${ev.agents.join('、')} 平票，进入第 ${ev.attempt} 次加赛`);
           this.liveLabel = `第 ${ev.round_no} 轮 · ${ev.agents.join('、')} 平票加赛`;
           this.scrollDown();
           break;
+        }
+
+        case 'tiebreak_result': {
+          const round = this.ensureRound(ev.round_no || this.currentRound || 1);
+          const step = round.tiebreakSteps.find((item) => item.attempt === ev.attempt);
+          if (step) Object.assign(step, ev);
+          this.liveLabel = `第 ${ev.round_no} 轮 · 第 ${ev.attempt} 次加赛投票完成`;
+          this.beginStage('', '加赛票已收到，正在本地汇总');
+          break;
+        }
 
         case 'votes': {
           const round = this.ensureRound(this.currentRound || 1);
           round.votes = ev;
-          round.thinking = [];
-          this.liveLabel = '投票完成，正在计票';
-          this.beginStage('', '投票完成，正在计票');
+          this.liveLabel = '票已收到，正在本地汇总票数';
+          this.beginStage('', '票已收到，正在本地汇总票数');
           this.scrollDown();
           break;
         }
@@ -660,6 +722,7 @@ Vue.createApp({
         case 'elimination': {
           const round = this.ensureRound(this.currentRound || 1);
           round.eliminated = ev;
+          delete this.modelOutputs[ev.agent];
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 出局，转为评审`;
           this.beginStage(ev.agent, `${ev.agent} 出局，转为评审`);
@@ -670,6 +733,7 @@ Vue.createApp({
         case 'technical_exit': {
           const round = this.ensureRound(this.currentRound || 1);
           round.exits.push(ev);
+          delete this.modelOutputs[ev.agent];
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 技术性退赛`;
           this.beginStage(ev.agent, `${ev.agent} 技术性退赛`);
@@ -709,6 +773,7 @@ Vue.createApp({
           this.statusText = this.status === 'error' ? '失败' : '已结束';
           this.liveLabel = this.final ? '比赛结束，可以回看全过程' : '比赛结束';
           this.rounds.forEach((round) => { round.thinking = []; });
+          this.modelOutputs = {};
           this.elapsed = Number(ev.duration || this.elapsed);
           this.activeAgent = this.winnerName || '';
           this.activeStage = this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
@@ -718,7 +783,7 @@ Vue.createApp({
           this.scrollDown();
           break;
       }
-      if (ev.kind !== 'waiting' && ev.kind !== 'model_output') {
+      if (!['waiting', 'model_output', 'voting'].includes(ev.kind)) {
         this.pushActivity(ev.kind, this.liveLabel, ev.agent || '');
       }
     },
@@ -792,6 +857,9 @@ Vue.createApp({
               vote_mode: transcript.vote_mode,
             };
           }
+          round.tiebreakSteps = record.tiebreak_steps || [];
+          round.voting = [];
+          round.votingStage = null;
           if (record.eliminated) {
             round.eliminated = {
               agent: record.eliminated,
@@ -817,8 +885,53 @@ Vue.createApp({
       }
     },
 
-    voteBars(votes) {
-      const entries = Object.entries(votes?.counts || {}).sort((a, b) => b[1] - a[1]);
+    voteStageLabel(stage) {
+      if (!stage || stage === 'main') return '本轮投票';
+      const match = String(stage).match(/^tiebreak-(\d+)$/);
+      return match ? `第 ${match[1]} 次加赛投票` : String(stage);
+    },
+
+    voteStageGroups(votes) {
+      const rows = votes?.rows || [];
+      const groups = new Map();
+      for (const row of rows) {
+        const stage = row.stage || 'main';
+        if (!groups.has(stage)) groups.set(stage, []);
+        groups.get(stage).push(row);
+      }
+      return [...groups.entries()]
+        .map(([stage, stageRows]) => ({
+          stage,
+          label: this.voteStageLabel(stage),
+          rows: stageRows,
+          counts: stageRows.reduce((counts, row) => {
+            if (row.target) counts[row.target] = (counts[row.target] || 0) + 1;
+            return counts;
+          }, {}),
+        }))
+        .sort((a, b) => {
+          if (a.stage === 'main') return -1;
+          if (b.stage === 'main') return 1;
+          return a.stage.localeCompare(b.stage, undefined, { numeric: true });
+        });
+    },
+
+    liveVotingRows(round) {
+      const stage = round.votingStage?.stage;
+      if (!stage || !round.voting?.length) return [];
+      if (round.votes?.rows?.some((row) => (row.stage || 'main') === stage)) return [];
+      return round.voting
+        .filter((row) => row.stage === stage)
+        .sort((a, b) => Number(a.is_judge) - Number(b.is_judge) || a.voter.localeCompare(b.voter));
+    },
+
+    currentVoteStage(round) {
+      const stage = round.votingStage?.stage;
+      return stage ? this.voteStageLabel(stage) : '投票';
+    },
+
+    voteBars(counts) {
+      const entries = Object.entries(counts || {}).sort((a, b) => b[1] - a[1]);
       const max = Math.max(1, ...entries.map((entry) => entry[1]));
       return entries.map(([name, count]) => ({
         name,
