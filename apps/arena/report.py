@@ -49,7 +49,8 @@ def _md(result: ArenaResult) -> str:
             add("| 投票者 | 投给 | 理由 |")
             add("| --- | --- | --- |")
             for v in r.votes:
-                who = v.voter + ("（评审）" if v.is_judge else "")
+                marks = ("（评审）" if v.is_judge else "") + ("（加赛）" if v.stage != "main" else "")
+                who = v.voter + marks
                 add(f"| {who} | {v.target or '弃权'} | {(v.reason or v.error or '').replace('|', '/')} |")
             add("")
             if r.counts:

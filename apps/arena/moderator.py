@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from collections import Counter
@@ -50,6 +51,7 @@ class Vote:
     reason: str = ""
     error: str | None = None
     is_judge: bool = False
+    stage: str = "main"
 
 
 @dataclass
@@ -201,7 +203,6 @@ class Arena:
         self._last_stance: dict[str, str] = {}
         self._judges: list[Any] = []          # 已出局但保留投票权
         self._elim_round: dict[str, int] = {}
-        self._cum_danger: Counter[str] = Counter()  # 累计"该出局"分数，用于平票裁决
 
     # -- 路径 ----------------------------------------------------------
     def _workdir(self, agent: Any) -> Path:
@@ -295,26 +296,9 @@ class Arena:
             # ---- 3. 全员投票：存活者 + 评审团 ----
             voters = list(self._judges) + list(active)
             self.sink.emit("voting_start", round_no=rnd, voters=len(voters))
-            votes = self._collect_votes(voters, active, record.speeches, eliminated, rnd)
-            record.votes = votes
-            counts = Counter(v.target for v in votes if v.target)
-            record.counts = dict(counts)
-            for name, c in counts.items():
-                self._cum_danger[name] += c if cfg.vote_mode == "eliminate" else -c
-
-            self.sink.emit(
-                "votes",
-                rows=[
-                    {"voter": v.voter, "target": v.target, "reason": v.reason,
-                     "error": v.error, "is_judge": v.is_judge}
-                    for v in votes
-                ],
-                counts=dict(counts),
-                vote_mode=cfg.vote_mode,
-                round_no=rnd,
+            out, n_votes, tiebreak = self._resolve_vote(
+                voters, active, record, eliminated, rnd
             )
-
-            out, n_votes, tiebreak = self._decide(counts, active, record.speeches)
             record.eliminated = out.name if out else None
             record.votes_received = n_votes
             record.tiebreak = tiebreak
@@ -323,7 +307,7 @@ class Arena:
                 rounds.append(record)
                 break
 
-            reasons = [v.reason for v in votes if v.target == out.name and v.reason]
+            reasons = [v.reason for v in record.votes if v.target == out.name and v.reason]
             label = "票" if cfg.vote_mode == "eliminate" else "支持票"
             reason_text = f"第 {rnd} 轮以 {n_votes} {label}出局" + (f"：{reasons[0]}" if reasons else "")
             eliminated.append(
@@ -435,16 +419,17 @@ class Arena:
         speeches: Sequence[Speech],
         eliminated: Sequence[dict[str, Any]],
         rnd: int,
+        stage: str = "main",
     ) -> list[Vote]:
         names = [a.name for a in candidates]
-        candidate_set = set(names)
+        judge_names = {a.name for a in self._judges}
         speech_pairs = [
             (s.agent, s.text if not s.error else f"（发言失败：{s.error}）") for s in speeches
         ]
         elim_pairs = [(e["agent"], e["reason"]) for e in eliminated]
 
         def task(agent: Any) -> Vote:
-            is_judge = agent.name not in candidate_set
+            is_judge = agent.name in judge_names
             judge_note = None
             if is_judge:
                 judge_note = (
@@ -471,9 +456,9 @@ class Arena:
                     continue
                 target, reason = parse_vote(res.text, names, agent.name)
                 if target:
-                    return Vote(rnd, agent.name, target, reason, None, is_judge)
+                    return Vote(rnd, agent.name, target, reason, None, is_judge, stage)
                 last_err = f"投票格式无法解析：{res.text[:60]}"
-            return Vote(rnd, agent.name, None, "", last_err, is_judge)
+            return Vote(rnd, agent.name, None, "", last_err, is_judge, stage)
 
         votes: list[Vote] = []
         with ThreadPoolExecutor(max_workers=min(len(voters), 10)) as pool:
@@ -483,9 +468,128 @@ class Arena:
                 try:
                     votes.append(fut.result())
                 except Exception as exc:
-                    votes.append(Vote(rnd, agent.name, None, "", str(exc)))
+                    votes.append(Vote(rnd, agent.name, None, "", str(exc), stage=stage))
         votes.sort(key=lambda v: (not v.is_judge, v.voter))
         return votes
+
+    def _edge_names(
+        self, counts: dict[str, int], candidates: Sequence[Any]
+    ) -> tuple[list[str], int]:
+        scores = {a.name: counts.get(a.name, 0) for a in candidates}
+        edge = min(scores.values()) if self.cfg.vote_mode == "support" else max(scores.values())
+        return [name for name, value in scores.items() if value == edge], edge
+
+    def _emit_votes(
+        self, votes: Sequence[Vote], counts: dict[str, int], rnd: int
+    ) -> None:
+        self.sink.emit(
+            "votes",
+            rows=[
+                {"voter": v.voter, "target": v.target, "reason": v.reason,
+                 "error": v.error, "is_judge": v.is_judge, "stage": v.stage}
+                for v in votes
+            ],
+            counts=dict(counts),
+            vote_mode=self.cfg.vote_mode,
+            round_no=rnd,
+        )
+
+    def _resolve_vote(
+        self,
+        voters: Sequence[Any],
+        active: Sequence[Any],
+        record: RoundRecord,
+        eliminated: Sequence[dict[str, Any]],
+        rnd: int,
+    ) -> tuple[Any | None, int, str | None]:
+        """收集首轮票；平票时让同票者加赛，再逐次随机减少投票人。"""
+        votes = self._collect_votes(voters, active, record.speeches, eliminated, rnd)
+        counts = Counter(v.target for v in votes if v.target)
+        record.votes = votes
+        record.counts = dict(counts)
+        self._emit_votes(votes, counts, rnd)
+
+        out, n_votes, tiebreak = self._decide(counts, active, record.speeches)
+        if out is not None or not counts:
+            return out, n_votes, tiebreak
+
+        tied_names, _ = self._edge_names(counts, active)
+        tied_agents = [a for a in active if a.name in set(tied_names)]
+        by_name = {a.name: a for a in tied_agents}
+        round_speeches = [
+            (s.agent, s.text if not s.error else f"（发言失败：{s.error}）")
+            for s in record.speeches
+        ]
+        remaining_voters = list(voters)
+        removed_names: list[str] = []
+        attempt = 0
+
+        while True:
+            attempt += 1
+            self.sink.emit(
+                "tiebreak",
+                round_no=rnd,
+                attempt=attempt,
+                agents=list(tied_names),
+                voters=len(remaining_voters),
+                removed=list(removed_names),
+            )
+
+            if attempt == 1:
+                tiebreak_speeches: list[tuple[str, str]] = []
+                for agent in tied_agents:
+                    prompt = prompts.build_tiebreak_speech_prompt(
+                        speaker=agent.name,
+                        proposition=self.cfg.proposition,
+                        candidates=tied_names,
+                        round_no=rnd,
+                        round_speeches=round_speeches,
+                        tiebreak_speeches=tiebreak_speeches,
+                    )
+                    self.sink.emit("thinking", agent=agent.name, role="平票加赛")
+                    res = self._ask_with_progress(agent, prompt, "平票加赛")
+                    speech = self._record_speech(rnd, agent, "平票加赛", res)
+                    record.speeches.append(speech)
+                    tiebreak_speeches.append(
+                        (speech.agent, speech.text if not speech.error else f"（发言失败：{speech.error}）")
+                    )
+
+            ballots = self._collect_votes(
+                remaining_voters,
+                tied_agents,
+                record.speeches,
+                eliminated,
+                rnd,
+                stage=f"tiebreak-{attempt}",
+            )
+            votes.extend(ballots)
+            counts = Counter(v.target for v in votes if v.target and v.stage == ballots[0].stage)
+            record.votes = votes
+            record.counts = dict(counts)
+            self._emit_votes(votes, counts, rnd)
+
+            if counts:
+                still_tied, edge = self._edge_names(counts, tied_agents)
+                if len(still_tied) == 1:
+                    reason = f"{len(tied_names)} 人平票，加赛发言后决出"
+                    if removed_names:
+                        reason = (
+                            f"{len(tied_names)} 人平票；随机移出投票人 "
+                            f"{'、'.join(removed_names)} 后决出"
+                        )
+                    return by_name[still_tied[0]], edge, reason
+                tied_names = still_tied
+                tied_agents = [a for a in tied_agents if a.name in set(tied_names)]
+                by_name = {a.name: a for a in tied_agents}
+
+            if len(remaining_voters) <= 1:
+                out = random.choice(tied_agents)
+                removed = "、".join(removed_names) or "无"
+                return out, 0, f"{len(tied_names)} 人加赛后仍平票，随机移出投票人 {removed}，最终随机裁决"
+
+            removed = random.choice(remaining_voters)
+            remaining_voters.remove(removed)
+            removed_names.append(removed.name)
 
     def _decide(
         self,
@@ -494,45 +598,22 @@ class Arena:
         speeches: Sequence[Speech],
     ) -> tuple[Any | None, int, str | None]:
         """返回 (出局者, 其票数, 平票说明)。"""
-        mode = self.cfg.vote_mode
         by_name = {a.name: a for a in active}
         lengths = {s.agent: len(extract_view(s.text)) for s in speeches}
-        scores = {a.name: counts.get(a.name, 0) for a in active}
 
         if not counts:
             target = min(active, key=lambda a: (lengths.get(a.name, 0), a.name))
             return target, 0, "无人有效投票，按信息量最少裁决"
 
-        if mode == "support":
-            edge = min(scores.values())
-            tied = [n for n, v in scores.items() if v == edge]
-        else:
-            edge = max(scores.values())
-            if edge == 0:
-                target = min(active, key=lambda a: (lengths.get(a.name, 0), a.name))
-                return target, 0, "无人有效投票，按信息量最少裁决"
-            tied = [n for n, v in scores.items() if v == edge]
+        tied, edge = self._edge_names(counts, active)
+        if self.cfg.vote_mode == "eliminate" and edge == 0:
+            target = min(active, key=lambda a: (lengths.get(a.name, 0), a.name))
+            return target, 0, "无人有效投票，按信息量最少裁决"
 
         if len(tied) == 1:
             return by_name.get(tied[0]), edge, None
 
-        # 平票：累计分数更该出局者优先，再看本轮发言信息量，最后按名字
-        def rank(name: str) -> tuple[int, int, str]:
-            return (-self._cum_danger.get(name, 0), lengths.get(name, 0), name)
-
-        winner = min(tied, key=rank)
-        same_cum = len({self._cum_danger.get(n, 0) for n in tied}) == 1
-        if mode == "support":
-            tiebreak = (
-                f"{len(tied)} 人平票且累计相同，按本轮发言信息量裁决"
-                if same_cum else f"{len(tied)} 人平票，按累计支持票更少者出局"
-            )
-        else:
-            tiebreak = (
-                f"{len(tied)} 人平票且累计票相同，按本轮发言信息量裁决"
-                if same_cum else f"{len(tied)} 人平票，按累计得票更多者淘汰"
-            )
-        return by_name.get(winner), edge, tiebreak
+        return None, edge, f"{len(tied)} 人平票，进入加赛"
 
     def _final_statement(
         self,

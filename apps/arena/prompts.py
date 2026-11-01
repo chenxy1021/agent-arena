@@ -149,6 +149,38 @@ def build_vote_prompt(
 {{"vote": "<被投的人名字>", "reason": "{reason_hint}"}}"""
 
 
+def build_tiebreak_speech_prompt(
+    *,
+    speaker: str,
+    proposition: str,
+    candidates: Sequence[str],
+    round_no: int,
+    round_speeches: Sequence[tuple[str, str]],
+    tiebreak_speeches: Sequence[tuple[str, str]],
+) -> str:
+    round_block = "\n\n".join(f"【{name}】\n{_clip(text)}" for name, text in round_speeches)
+    tiebreak_block = (
+        "\n\n".join(f"【{name}】\n{_clip(text)}" for name, text in tiebreak_speeches)
+        if tiebreak_speeches else "（你是第一位加赛发言者）"
+    )
+    return f"""你是 {speaker}。第 {round_no} 轮投票中，{", ".join(candidates)} 票数相同，进入加赛辩论。
+
+【命题】
+{proposition}
+
+【本轮全部正式发言】
+{round_block}
+
+【本轮加赛已有发言】
+{tiebreak_block}
+
+【你的任务】
+只围绕平票争议继续辩论：补充新论据、回应质疑，或修正此前论证。不要重复已有观点，不要投票，不要点评赛制。
+
+【输出格式】严格按下面标签输出，不要任何开场白、解释或结尾总结：
+【观点】<150-250 字：新增论据 + 对平票对手的回应 + 可执行建议>"""
+
+
 def build_final_prompt(
     *,
     winner: str,

@@ -173,3 +173,19 @@ class ApiModelAgent:
         if text and on_output:
             on_output(text)
         return text
+
+
+def suggest_display_name(agent: ApiModelAgent, timeout: float = 30) -> str:
+    """Ask a configured model for a short display name; this also tests connectivity."""
+    prompt = (
+        "请给自己取一个适合参加中文多智能体辩论赛的显示名称。"
+        "要求 2-12 个汉字或不超过 20 个字符，不要解释，不要引号，只输出名称本身。"
+    )
+    result = agent.ask(prompt, timeout=timeout, retries=0)
+    if result.error:
+        raise ValueError(f"连通性测试失败：{result.error}")
+    first_line = next((line.strip() for line in result.text.splitlines() if line.strip()), "")
+    name = first_line.strip("\"'“”‘’《》「」【】 ").removeprefix("名称：").strip()
+    if not name:
+        raise ValueError("模型返回了空名称")
+    return name[:40]

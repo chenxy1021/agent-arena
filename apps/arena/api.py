@@ -14,7 +14,8 @@ from fastapi.responses import StreamingResponse
 from config import settings
 
 from . import database
-from .schemas import ModelCreate, ModelUpdate, StartRun
+from .providers import ApiModelAgent, suggest_display_name
+from .schemas import ModelCreate, ModelNameRequest, ModelUpdate, StartRun
 from .services import manager
 
 router = APIRouter()
@@ -84,6 +85,38 @@ def update_model(model_id: int, payload: ModelUpdate) -> dict[str, Any]:
     config.pop("api_key", None)
     config["has_api_key"] = True
     return config
+
+
+@router.post("/models/suggest-name")
+def suggest_model_name(payload: ModelNameRequest) -> dict[str, str]:
+    base_url = payload.base_url.strip()
+    api_key = payload.api_key.strip()
+    model = payload.model.strip()
+    if not base_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Base URL 必须以 http:// 或 https:// 开头")
+    if not model:
+        raise HTTPException(status_code=400, detail="模型 ID 不能为空")
+    if payload.model_id and not api_key:
+        existing = database.get_model(payload.model_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="模型配置不存在")
+        api_key = str(existing["api_key"])
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API Key 不能为空")
+
+    agent = ApiModelAgent(
+        config_id=payload.model_id or 0,
+        name="命名助手",
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        system_prompt=payload.system_prompt.strip(),
+        temperature=payload.temperature,
+    )
+    try:
+        return {"name": suggest_display_name(agent)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/runs", status_code=201)

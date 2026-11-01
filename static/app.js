@@ -73,6 +73,8 @@ Vue.createApp({
       modelsLoading: true,
       showModelModal: false,
       savingModel: false,
+      namingModel: false,
+      hintOk: false,
       editingModelId: 0,
       modelForm: {
         name: '',
@@ -203,6 +205,7 @@ Vue.createApp({
         waiting: '等待',
         speech: '发言',
         voting_start: '投票',
+        tiebreak: '加赛',
         votes: '计票',
         elimination: '淘汰',
         technical_exit: '退出',
@@ -277,6 +280,7 @@ Vue.createApp({
       };
       this.editingModelId = model?.id || 0;
       this.hint = '';
+      this.hintOk = false;
       this.showModelModal = true;
     },
 
@@ -284,12 +288,14 @@ Vue.createApp({
       if (this.savingModel) return;
       this.showModelModal = false;
       this.editingModelId = 0;
+      this.hintOk = false;
     },
 
     async saveModel() {
-      if (this.savingModel) return;
+      if (this.savingModel || this.namingModel) return;
       this.savingModel = true;
       this.hint = '';
+      this.hintOk = false;
       try {
         const res = await fetch(
           this.editingModelId ? `/api/models/${this.editingModelId}` : '/api/models',
@@ -311,8 +317,51 @@ Vue.createApp({
         await this.loadModels();
       } catch (err) {
         this.hint = err.message;
+        this.hintOk = false;
       } finally {
         this.savingModel = false;
+      }
+    },
+
+    async suggestModelName() {
+      if (this.namingModel || this.savingModel) return;
+      const baseUrl = this.modelForm.base_url.trim();
+      const model = this.modelForm.model.trim();
+      if (!baseUrl || !model) {
+        this.hint = '先填写 Base URL 和模型 ID';
+        this.hintOk = false;
+        return;
+      }
+      if (!this.modelForm.api_key.trim() && !this.editingModelId) {
+        this.hint = '先填写 API Key';
+        this.hintOk = false;
+        return;
+      }
+      this.namingModel = true;
+      this.hint = '正在连接模型并生成名称…';
+      this.hintOk = false;
+      try {
+        const res = await fetch('/api/models/suggest-name', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model_id: this.editingModelId || null,
+            ...this.modelForm,
+            temperature: this.modelForm.temperature === ''
+              ? null
+              : Number(this.modelForm.temperature),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.modelForm.name = data.name;
+        this.hint = '连通性正常，已生成显示名称。';
+        this.hintOk = true;
+      } catch (err) {
+        this.hint = `取名失败：${err.message}`;
+        this.hintOk = false;
+      } finally {
+        this.namingModel = false;
       }
     },
 
@@ -586,6 +635,12 @@ Vue.createApp({
         case 'voting_start':
           this.beginStage('', `${ev.voters} 位投票者正在并行投票`);
           this.liveLabel = `第 ${ev.round_no} 轮 · 全员投票中`;
+          break;
+
+        case 'tiebreak':
+          this.beginStage('', `${ev.agents.join('、')} 平票，进入第 ${ev.attempt} 次加赛`);
+          this.liveLabel = `第 ${ev.round_no} 轮 · ${ev.agents.join('、')} 平票加赛`;
+          this.scrollDown();
           break;
 
         case 'votes': {

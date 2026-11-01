@@ -1,14 +1,16 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from apps.arena.adapters import CallResult
 from apps.arena.mock import MockAgent
 from apps.arena.events import RecordingSink
-from apps.arena.moderator import Arena, ArenaConfig, Speech
+from apps.arena.moderator import Arena, ArenaConfig, RoundRecord, Speech, Vote
 from apps.arena import prompts
 
 
-class DecideTiebreakTest(unittest.TestCase):
+class DecideVoteTest(unittest.TestCase):
     def make_arena(self, mode: str) -> Arena:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -17,33 +19,75 @@ class DecideTiebreakTest(unittest.TestCase):
             ArenaConfig(proposition="test", out_dir=Path(tmp.name), vote_mode=mode),
         )
 
-    def test_eliminate_uses_more_cumulative_votes(self) -> None:
+    def test_unique_vote_selects_target(self) -> None:
         arena = self.make_arena("eliminate")
         a, b = arena.agents
-        arena._cum_danger[a.name] = 5
-        arena._cum_danger[b.name] = 1
         speeches = [
             Speech(1, a.name, "开场发言", "x" * 10, 0),
             Speech(1, b.name, "回应发言", "y" * 10, 0),
         ]
 
-        out, _, _ = arena._decide({a.name: 1, b.name: 1}, arena.agents, speeches)
+        out, votes, _ = arena._decide({a.name: 2, b.name: 1}, arena.agents, speeches)
 
         self.assertIs(out, a)
+        self.assertEqual(votes, 2)
 
-    def test_support_uses_fewer_cumulative_support_votes(self) -> None:
-        arena = self.make_arena("support")
+    def test_tied_vote_enters_tiebreak(self) -> None:
+        arena = self.make_arena("eliminate")
         a, b = arena.agents
-        arena._cum_danger[a.name] = -5
-        arena._cum_danger[b.name] = -1
         speeches = [
             Speech(1, a.name, "开场发言", "x" * 10, 0),
             Speech(1, b.name, "回应发言", "y" * 10, 0),
         ]
 
-        out, _, _ = arena._decide({a.name: 1, b.name: 1}, arena.agents, speeches)
+        out, _, tiebreak = arena._decide({a.name: 1, b.name: 1}, arena.agents, speeches)
 
-        self.assertIs(out, b)
+        self.assertIsNone(out)
+        self.assertIn("进入加赛", tiebreak)
+
+
+class TiebreakVoteTest(unittest.TestCase):
+    def test_tiebreak_revotes_then_reduces_voters_until_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            arena = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                sink=sink,
+            )
+            a, b = arena.agents
+            record = RoundRecord(
+                no=2,
+                order=[a.name, b.name],
+                speeches=[
+                    Speech(2, a.name, "跨轮点评", "a speech", 0),
+                    Speech(2, b.name, "跨轮点评", "b speech", 0),
+                ],
+            )
+            ballots = [
+                [Vote(2, a.name, b.name), Vote(2, b.name, a.name)],
+                [Vote(2, a.name, b.name, stage="tiebreak-1"),
+                 Vote(2, b.name, a.name, stage="tiebreak-1")],
+                [Vote(2, b.name, a.name, stage="tiebreak-2")],
+            ]
+            with (
+                patch.object(arena, "_collect_votes", side_effect=ballots),
+                patch.object(
+                    arena,
+                    "_ask_with_progress",
+                    return_value=CallResult(text="【观点】加赛补充论证", elapsed=0),
+                ),
+                patch("apps.arena.moderator.random.choice", return_value=a),
+            ):
+                out, _, tiebreak = arena._resolve_vote(
+                    [a, b], [a, b], record, [], 2
+                )
+
+        self.assertIs(out, a)
+        self.assertIn("随机移出投票人", tiebreak)
+        self.assertEqual(len([s for s in record.speeches if s.role == "平票加赛"]), 2)
+        self.assertTrue(any(v.stage.startswith("tiebreak") for v in record.votes))
+        self.assertTrue(any(event["kind"] == "tiebreak" for event in sink.events))
 
 
 class ProgressEventTest(unittest.TestCase):

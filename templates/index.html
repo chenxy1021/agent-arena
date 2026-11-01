@@ -222,7 +222,11 @@
                   <div class="vote-detail-head">逐票记录</div>
                   <div v-for="(row, vi) in round.votes.rows" :key="`v-${vi}`" class="vote-record">
                     <div class="vote-record-main">
-                      <span>{{ row.voter }}<small v-if="row.is_judge">评委</small></span>
+                      <span>
+                        {{ row.voter }}
+                        <small v-if="row.is_judge">评委</small>
+                        <small v-if="row.stage && row.stage !== 'main'">加赛</small>
+                      </span>
                       <b>投给 {{ row.target || '未投' }}</b>
                     </div>
                     <p>{{ row.reason || row.error || '未说明理由' }}</p>
@@ -334,7 +338,13 @@
       </div>
       <div class="model-form">
         <label>显示名称
-          <input v-model.trim="modelForm.name" required maxlength="80" placeholder="例如：GPT-5">
+          <span class="name-input-row">
+            <input v-model.trim="modelForm.name" required maxlength="80" placeholder="例如：GPT-5">
+            <button type="button" class="name-suggest" :disabled="namingModel || savingModel"
+              @click="suggestModelName">
+              {{ namingModel ? '测试中…' : '自动取名' }}
+            </button>
+          </span>
         </label>
         <label>Base URL
           <input v-model.trim="modelForm.base_url" required type="url"
@@ -357,12 +367,12 @@
             placeholder="例如：0.7">
         </label>
       </div>
-      <p class="modal-hint">{{ hint }}</p>
+      <p class="modal-hint" :class="{ success: hintOk }">{{ hint }}</p>
       <div class="modal-actions">
         <button type="button" class="secondary-button" :disabled="savingModel" @click="closeModelModal">
           取消
         </button>
-        <button type="submit" class="primary-button" :disabled="savingModel">
+        <button type="submit" class="primary-button" :disabled="savingModel || namingModel">
           {{ savingModel ? '保存中…' : (editingModelId ? '保存修改' : '登记模型') }}
         </button>
       </div>

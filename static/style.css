@@ -1181,12 +1181,47 @@ button { color: inherit; }
 .model-form input::placeholder,
 .model-form textarea::placeholder { color: #a5a29b; }
 
+.name-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.name-input-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.name-suggest {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.name-suggest:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.name-suggest:disabled {
+  border-color: var(--line-strong);
+  color: var(--gray);
+  cursor: wait;
+}
+
 .modal-hint {
   min-height: 18px;
   margin: 0 0 10px;
   color: var(--red);
   font-size: 11px;
 }
+
+.modal-hint.success { color: var(--gray); }
 
 .modal-actions {
   display: flex;

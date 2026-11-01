@@ -3,7 +3,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from apps.arena.providers import ApiModelAgent, _read_stream, completions_url
+from apps.arena.adapters import CallResult
+from apps.arena.providers import ApiModelAgent, _read_stream, completions_url, suggest_display_name
 
 
 class ProviderStreamTest(unittest.TestCase):
@@ -41,6 +42,23 @@ class ProviderUrlTest(unittest.TestCase):
             completions_url("https://example.com/v1/chat/completions"),
             "https://example.com/v1/chat/completions",
         )
+
+
+class SuggestDisplayNameTest(unittest.TestCase):
+    def test_cleans_model_name_response(self) -> None:
+        class FakeAgent:
+            def ask(self, *_args, **_kwargs):
+                return CallResult(text="「星河辩手」", elapsed=0)
+
+        self.assertEqual(suggest_display_name(FakeAgent()), "星河辩手")
+
+    def test_reports_connectivity_error(self) -> None:
+        class FailingAgent:
+            def ask(self, *_args, **_kwargs):
+                return CallResult(error="API 401：unauthorized")
+
+        with self.assertRaisesRegex(ValueError, "连通性测试失败"):
+            suggest_display_name(FailingAgent())
 
 
 class ApiModelAgentTest(unittest.TestCase):
