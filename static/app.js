@@ -1,25 +1,17 @@
 /* Agent Arena 前端：Vue 3，无构建。 */
 
-/* Muted identity set: one hue per model, low chroma, used only on a
-   dot and a 1px rule. Never as a fill. */
+/* Printed-ink identity set. Colour is only used on labels and tally marks. */
 const PALETTE = [
-  '#7fb6a8', '#c9a76a', '#9d93c9', '#c98a8a', '#8fa8c9',
-  '#9fbf87', '#c99a7a', '#7fb3bf', '#b39ac4', '#bdbd8a',
-];
-
-const LIGHT_PALETTE = [
-  '#2f7d70', '#8b6528', '#685d91', '#9b5054', '#4e6d91',
-  '#64865a', '#9b6347', '#397d88', '#715b85', '#77742e',
+  '#8c3b32', '#2f6157', '#4a4e86', '#a9752a', '#6b3f63', '#3d6b78',
 ];
 
 function agentColor(name) {
-  const palette = document.documentElement.dataset.theme === 'light' ? LIGHT_PALETTE : PALETTE;
   let hash = 2166136261;
   for (let i = 0; i < String(name).length; i++) {
     hash ^= String(name).charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  return palette[Math.abs(hash) % palette.length];
+  return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
 function cleanError(data) {
@@ -29,11 +21,52 @@ function cleanError(data) {
   return data.error || '请求失败';
 }
 
+const TALLY_STROKES = [
+  { x1: 2, y1: 2, x2: 16, y2: 2 },
+  { x1: 9, y1: 2, x2: 9, y2: 20 },
+  { x1: 2, y1: 10, x2: 16, y2: 10 },
+  { x1: 5, y1: 10, x2: 5, y2: 18 },
+  { x1: 2, y1: 20, x2: 16, y2: 20 },
+];
+
+const TallyMarks = {
+  props: {
+    count: { type: Number, default: 0 },
+    color: { type: String, default: 'currentColor' },
+  },
+  computed: {
+    groups() {
+      const groups = [];
+      let remaining = Math.max(0, Number(this.count) || 0);
+      while (remaining > 0) {
+        groups.push(TALLY_STROKES.slice(0, Math.min(5, remaining)));
+        remaining -= 5;
+      }
+      return groups;
+    },
+  },
+  template: `
+    <span class="tally-marks" :style="{ color: color }">
+      <span class="tally-glyphs" v-if="count > 0">
+        <svg v-for="(strokeGroup, groupIndex) in groups" :key="groupIndex"
+          class="tally-glyph" viewBox="0 0 18 22" aria-hidden="true">
+          <line v-for="(stroke, strokeIndex) in strokeGroup" :key="strokeIndex"
+            :x1="stroke.x1" :y1="stroke.y1" :x2="stroke.x2" :y2="stroke.y2"
+            :style="{ animationDelay: ((groupIndex * 5 + strokeIndex) * 60) + 'ms' }" />
+        </svg>
+      </span>
+      <span v-else class="tally-zero">〇</span>
+      <b>{{ count }}</b>
+    </span>
+  `,
+};
+
 Vue.createApp({
+  components: { TallyMarks },
+
   data() {
     return {
       proposition: '',
-      theme: document.documentElement.dataset.theme || 'dark',
       mode: 'eliminate',
       timeout: 240,
       models: [],
@@ -75,6 +108,7 @@ Vue.createApp({
       modelOutputs: {},
       modelOutputEls: {},
       modelStreamSeq: 0,
+      rosterOpen: false,
       timer: null,
     };
   },
@@ -85,6 +119,19 @@ Vue.createApp({
     },
     modelStreams() {
       return Object.values(this.modelOutputs).sort((a, b) => b.seq - a.seq);
+    },
+    scoreByName() {
+      const scores = {};
+      for (const participant of this.participants) scores[participant.name] = 0;
+      for (const round of this.rounds) {
+        for (const [name, count] of Object.entries(round.votes?.counts || {})) {
+          scores[name] = (scores[name] || 0) + Number(count);
+        }
+      }
+      return scores;
+    },
+    outCount() {
+      return this.participants.filter((item) => item.state === 'out').length;
     },
     elapsedText() {
       const total = Math.max(0, Math.floor(this.elapsed));
@@ -120,14 +167,21 @@ Vue.createApp({
   methods: {
     agentColor,
 
-    toggleTheme() {
-      this.theme = this.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = this.theme;
-      try {
-        localStorage.setItem('arena-theme', this.theme);
-      } catch (_) {
-        // Theme still applies when storage is unavailable.
-      }
+    toggleRoster() {
+      this.rosterOpen = !this.rosterOpen;
+    },
+
+    newMatch() {
+      this.resetArena();
+      this.proposition = '';
+    },
+
+    roundNo(no) {
+      return String(no).padStart(2, '0');
+    },
+
+    scoreFor(name) {
+      return this.scoreByName[name] || 0;
     },
 
     modeLabel(mode) {
@@ -302,6 +356,7 @@ Vue.createApp({
       this.modelOutputs = {};
       this.modelOutputEls = {};
       this.modelStreamSeq = 0;
+      this.rosterOpen = false;
       this.stopTimer();
     },
 
@@ -684,6 +739,7 @@ Vue.createApp({
         this.liveLabel = '历史战报已载入';
         this.activeAgent = transcript.winner || '';
         this.activeStage = '历史回放完成';
+        this.elapsed = Number(transcript.duration || 0);
         this.stageElapsed = Number(transcript.duration || 0);
         this.pushActivity('done', `载入历史提问：${transcript.proposition || id}`, transcript.winner || '');
         this.hint = '';
@@ -696,10 +752,10 @@ Vue.createApp({
     voteBars(votes) {
       const entries = Object.entries(votes?.counts || {}).sort((a, b) => b[1] - a[1]);
       const max = Math.max(1, ...entries.map((entry) => entry[1]));
-      return entries.map(([name, count], i) => ({
+      return entries.map(([name, count]) => ({
         name,
         count,
-        lead: i === 0 && count > 0,
+        lead: count > 0 && count === max,
         width: (count / max) * 100,
       }));
     },
