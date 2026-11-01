@@ -161,43 +161,145 @@
         </div>
       </header>
 
-      <section ref="stage" class="stage" :class="eventFx ? 'fx-' + eventFx : ''"
-        :style="stageTiltStyle" aria-label="参赛模型追光舞台">
-        <div class="stage-ambient" aria-hidden="true"></div>
-        <canvas ref="stageCanvas" class="stage-canvas" aria-hidden="true"></canvas>
-        <div class="stage-grid" aria-hidden="true"></div>
-        <div class="stage-camera-sweep" aria-hidden="true"></div>
-        <div class="stage-transition" aria-hidden="true"></div>
-        <div class="stage-lights">
-          <article v-for="(p, index) in participants" :key="p.name" class="beam"
+      <section ref="stage" class="table-stage" :class="[
+        eventFx ? 'fx-' + eventFx : '',
+        {
+          'is-intro': tableIntro,
+          'is-overview': tableFocused,
+          'is-done': !!winnerName,
+          'is-voting': votingMode,
+          'is-waiting': waitingMode
+        }
+      ]" :style="stageTiltStyle" aria-label="多智能体圆桌会议">
+        <div class="table-blackout" aria-hidden="true"></div>
+        <div class="table-stage-head">
+          <span>ROUND {{ roundNo(currentRound || 1) }}</span>
+          <strong>{{ liveLabel }}</strong>
+          <i></i>
+        </div>
+
+        <svg class="table-rim-light" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="rim-light-gradient" x1="0" x2="1">
+              <stop offset="0" stop-color="#ff2e63" stop-opacity="0"/>
+              <stop offset=".5" stop-color="#fff4df"/>
+              <stop offset="1" stop-color="#ff2e63" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <ellipse class="rim-guide" cx="500" cy="310" rx="420" ry="155" pathLength="1"/>
+          <ellipse class="rim-spot" cx="500" cy="310" rx="420" ry="155"
+            pathLength="1" :style="rimSpotStyle"/>
+        </svg>
+
+        <div class="round-table">
+          <div class="table-edge"></div>
+          <div class="table-surface">
+            <span class="table-proposition">{{ proposition }}</span>
+            <div class="table-paper-field">
+              <button v-for="(paper, paperIndex) in tablePapers" :key="paper.key"
+                type="button" class="table-record-paper"
+                :class="{ landing: settledKey === paper.key, out: participantState(paper.agent) === 'out' }"
+                :style="paperStyle(paper, paperIndex)"
+                @click="openPaper(paper)">
+                <span class="record-color" :style="{ background: agentColor(paper.agent) }"></span>
+                <b>{{ paper.agent }}</b>
+                <small>{{ paper.preview }}</small>
+              </button>
+            </div>
+            <div v-if="votingMode || tableVoteTotal" class="table-vote-ring">
+              <svg viewBox="0 0 200 200" aria-label="环形票数刻度">
+                <circle class="vote-ring-base" cx="100" cy="100" r="76"/>
+                <circle v-for="(p, voteIndex) in participants" :key="`arc-${p.name}`"
+                  class="vote-ring-arc" cx="100" cy="100" r="76"
+                  :stroke="agentColor(p.name)" :style="voteArcStyle(p.name, voteIndex)"/>
+              </svg>
+              <span>{{ tableVoteTotal }}<small>VOTES</small></span>
+            </div>
+            <div v-if="winnerName" class="table-winner-mark">
+              <small>FINAL DECISION</small>
+              <b>{{ winnerName }}</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-seats">
+          <article v-for="p in participants" :key="`seat-${p.name}`" class="table-seat"
             :class="{
               active: running && p.name === activeAgent,
               thinking: p.state === 'thinking',
               out: p.state === 'out',
-              lead: scoreFor(p.name) > 0 && scoreFor(p.name) === beamMax,
-              hit: hitAgent === p.name,
-              flicker: leaderFlicker && scoreFor(p.name) === beamMax
+              winner: winnerName === p.name,
+              hit: hitAgent === p.name
             }"
-            :style="{
-              '--team-color': agentColor(p.name),
-              '--beam-height': beamHeight(p.name) + '%',
-              '--beam-scale': beamScale(p.name),
-              '--beam-delay': (index * 90) + 'ms',
-              '--sway-delay': (-index * .8) + 's'
-            }">
-            <span class="beam-score"><rolling-number :text="String(scoreFor(p.name))" /></span>
-            <span class="beam-shaft"><i></i></span>
-            <span class="beam-spot"></span>
-            <div class="beam-caption">
-              <b>{{ displayName(p.name) }}</b>
-              <small v-if="p.state === 'out'">出局</small>
-              <small v-else-if="running && p.name === activeAgent">发言中 {{ stageElapsedText }}</small>
-              <small v-else-if="p.state === 'thinking'">思考中 {{ stageElapsedText }}</small>
-              <small v-else>在场</small>
+            :style="seatStyle(p)">
+            <div class="seat-card" :style="{ '--team-color': agentColor(p.name) }">
+              <span class="seat-color"></span>
+              <b>{{ displayName(p.name) }}<em>{{ p.label }}</em></b>
+              <small><rolling-number :text="String(scoreFor(p.name))" /> 票</small>
+              <span class="seat-status">
+                {{ p.state === 'out' ? '出局' : winnerName === p.name ? '胜者' : p.name === activeAgent ? activeStage : '在场' }}
+              </span>
+              <span class="seat-back">出局</span>
             </div>
           </article>
         </div>
-        <div class="stage-floor" aria-hidden="true"></div>
+
+        <transition name="paper-drop">
+          <article v-if="currentPaper" class="speaker-paper"
+            :class="{ final: currentPaper.final, waiting: !currentPaper.text }"
+            :style="{ '--team-color': agentColor(currentPaper.agent) }">
+            <header>
+              <span>{{ currentPaper.final ? 'FINAL' : '第 ' + currentPaper.round + ' 轮' }}</span>
+              <b>{{ currentPaper.agent }}</b>
+              <span>{{ currentPaper.role }}</span>
+              <time>{{ stageElapsedText }}</time>
+            </header>
+            <div class="speaker-paper-body">
+              <template v-if="currentPaper.text">
+                <div v-for="(block, blockIndex) in paperBlocks(currentPaper.text)" :key="blockIndex"
+                  class="paper-block" :class="{ gap: blockIndex > 0 }">
+                  <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
+                </div>
+              </template>
+              <p v-else class="paper-waiting">
+                {{ currentPaper.agent }} 正在整理{{ currentPaper.role }}<span>…</span>
+              </p>
+              <i v-if="currentPaper.text" class="paper-caret" aria-hidden="true"></i>
+            </div>
+            <footer>
+              <span>剩余 {{ remainingTimeText }}</span>
+              <div class="paper-ticks" aria-hidden="true">
+                <i v-for="tick in paperTickCount" :key="tick"
+                  :class="{ used: stageElapsed >= tick * 30 }"></i>
+              </div>
+            </footer>
+          </article>
+        </transition>
+
+        <aside v-if="recentVoteRows.length" class="vote-receipt">
+          <span>RECENT BALLOTS</span>
+          <p v-for="row in recentVoteRows" :key="`${row.stage}-${row.voter}`">
+            <b>{{ row.voter }}</b>
+            <i>→</i>
+            <strong>{{ row.target }}</strong>
+            <small>{{ row.reason || row.error || '未说明理由' }}</small>
+          </p>
+        </aside>
+
+        <div class="table-actions">
+          <button type="button" @click="toggleTableOverview">
+            {{ tableFocused ? '恢复视角' : '俯视全场' }}
+          </button>
+          <button type="button" @click="showTranscriptPanel">查阅记录</button>
+        </div>
+
+        <svg class="table-vote-chips" viewBox="0 0 1000 540" preserveAspectRatio="none" aria-hidden="true">
+          <g v-for="chip in voteChips" :key="chip.id">
+            <circle r="7" :fill="chip.color">
+              <animateMotion :path="voteChipPath(chip)" dur="0.6s" fill="freeze"/>
+            </circle>
+          </g>
+        </svg>
       </section>
 
       <div class="match-statusline">
@@ -211,7 +313,11 @@
         </div>
       </div>
 
-      <div ref="stream" class="stream">
+      <div ref="stream" class="stream table-transcript" :class="{ open: showTranscript }">
+        <div class="transcript-toolbar">
+          <span>会议记录 · 全文</span>
+          <button type="button" @click="showTranscript = false">收起</button>
+        </div>
         <div v-if="!rounds.length" class="match-pending">
           <div class="pending-mark"></div>
           <p>{{ running ? '舞台已经亮起，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
@@ -427,13 +533,22 @@
     </section>
   </main>
 
-  <aside v-if="running && activeAgent && !replaying" class="lower-third"
-    :style="{ '--team-color': agentColor(activeAgent) }">
-    <span class="lower-live">ON AIR</span>
-    <b>{{ activeAgent }}</b>
-    <small>{{ activeStage || '现场发言' }}</small>
-    <i :style="{ width: Math.max(0, Math.min(100, stageProgress)) + '%' }"></i>
-  </aside>
+  <div v-if="openedPaper" class="paper-focus-backdrop" @click.self="closePaper">
+    <article class="paper-focus" :style="{ '--team-color': agentColor(openedPaper.agent) }">
+      <header>
+        <span>第 {{ openedPaper.roundNo }} 轮 · {{ openedPaper.role }}</span>
+        <b>{{ openedPaper.agent }}</b>
+        <time>{{ Number(openedPaper.elapsed || 0).toFixed(1) }}s</time>
+        <button type="button" @click="closePaper">放回桌面</button>
+      </header>
+      <div class="paper-focus-body">
+        <div v-for="(block, blockIndex) in paperBlocks(openedPaper.text)" :key="blockIndex"
+          class="paper-block" :class="{ gap: blockIndex > 0 }">
+          <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
+        </div>
+      </div>
+    </article>
+  </div>
 
   <div class="event-transition" :class="eventFx ? 'is-' + eventFx : ''" aria-hidden="true"></div>
   <div v-if="archiveStamp" class="archive-stamp">

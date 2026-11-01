@@ -154,6 +154,14 @@ Vue.createApp({
       pointerX: 0,
       pointerY: 0,
       reducedMotion: false,
+      stageWidth: 960,
+      stageHeight: 680,
+      tableIntro: false,
+      tableFocused: false,
+      showTranscript: false,
+      openedPaper: null,
+      voteChips: [],
+      voteChipSeq: 0,
     };
   },
 
@@ -213,6 +221,86 @@ Vue.createApp({
         '--stage-shift-y': `${(this.pointerY * 4).toFixed(2)}px`,
       };
     },
+    tablePapers() {
+      const papers = [];
+      for (const round of this.rounds) {
+        round.speeches.forEach((speech, index) => {
+          papers.push({
+            ...speech,
+            roundNo: round.no,
+            key: `${round.no}-${index}`,
+            preview: this.paperPreview(speech.text),
+          });
+        });
+      }
+      return papers;
+    },
+    currentPaper() {
+      if (this.final) {
+        return {
+          agent: this.final.agent,
+          role: '最终裁决',
+          round: 'FINAL',
+          text: this.final.text,
+          elapsed: this.elapsed,
+          final: true,
+        };
+      }
+      const stream = this.modelStreams[0];
+      if (stream) {
+        return {
+          agent: stream.agent,
+          role: stream.role,
+          round: this.currentRound,
+          text: stream.text,
+          elapsed: this.stageElapsed,
+        };
+      }
+      const round = this.rounds.find((item) => item.no === this.currentRound);
+      const thinking = round?.thinking?.[0];
+      if (thinking) {
+        return {
+          agent: thinking.agent,
+          role: thinking.role,
+          round: this.currentRound,
+          text: '',
+          elapsed: this.stageElapsed,
+        };
+      }
+      return null;
+    },
+    tableVoteCounts() {
+      const round = this.rounds.find((item) => item.no === this.currentRound);
+      if (this.votingMode) return { ...this.liveVoteCounts };
+      return { ...(round?.votes?.counts || {}) };
+    },
+    tableVoteTotal() {
+      return Object.values(this.tableVoteCounts).reduce(
+        (total, count) => total + Number(count || 0),
+        0,
+      );
+    },
+    recentVoteRows() {
+      const round = this.rounds.find((item) => item.no === this.currentRound);
+      const rows = [
+        ...(round?.votes?.rows || []),
+        ...(round?.voting || []).filter((row) => row.status === 'done'),
+      ];
+      const unique = new Map();
+      rows.forEach((row) => {
+        if (row.target) unique.set(`${row.stage || 'main'}-${row.voter}`, row);
+      });
+      return [...unique.values()].slice(-3).reverse();
+    },
+    paperTickCount() {
+      return Math.max(1, Math.ceil((Number(this.timeout) || 240) / 30));
+    },
+    remainingTimeText() {
+      const remaining = Math.max(0, Number(this.timeout) - this.stageElapsed);
+      const min = String(Math.floor(remaining / 60)).padStart(2, '0');
+      const sec = String(Math.floor(remaining % 60)).padStart(2, '0');
+      return `${min}:${sec}`;
+    },
   },
 
   mounted() {
@@ -249,6 +337,191 @@ Vue.createApp({
 
     roundNo(no) {
       return String(no).padStart(2, '0');
+    },
+
+    paperPreview(text) {
+      return String(text || '')
+        .replace(/【(点评|观点|结论|论据|行动)】/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 22) || '本轮未完成发言';
+    },
+
+    paperBlocks(text) {
+      const blocks = this.speechBlocks(text);
+      if (blocks.length === 1 && blocks[0].kind === 'plain' && String(text || '').includes('【结论】')) {
+        return this.finalBlocks(text).map((block) => ({
+          ...block,
+          marker: block.label ? `【${block.label}】` : '',
+        }));
+      }
+      return blocks.map((block) => ({
+        ...block,
+        marker: block.kind === 'view' ? '【观点】' : block.kind === 'critique' ? '【点评】' : '',
+      }));
+    },
+
+    seatStyle(participant) {
+      const alive = this.participants.filter((item) => item.state !== 'out');
+      const aliveIndex = alive.findIndex((item) => item.name === participant.name);
+      if (participant.state === 'out' || aliveIndex < 0) {
+        const outIndex = this.participants
+          .filter((item) => item.state === 'out')
+          .findIndex((item) => item.name === participant.name);
+        const compact = window.innerWidth <= 720;
+        return {
+          '--seat-x': `${this.stageWidth * ((compact ? .22 : .31) + Math.max(0, outIndex) * .055)}px`,
+          '--seat-y': `${-this.stageHeight * (compact ? .34 : .07)}px`,
+          '--seat-scale': .68,
+          '--seat-width': '112px',
+          '--seat-z': 6 + outIndex,
+          '--seat-order': outIndex,
+        };
+      }
+      const angle = (-90 + (aliveIndex * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
+      const depth = (Math.sin(angle) + 1) / 2;
+      const compact = window.innerWidth <= 720;
+      return {
+        '--seat-x': `${Math.cos(angle) * this.stageWidth * (compact ? .41 : .4)}px`,
+        '--seat-y': `${compact
+          ? -this.stageHeight * .205 + Math.sin(angle) * 105
+          : this.stageHeight * (.07 + Math.sin(angle) * .25)}px`,
+        '--seat-scale': (.84 + depth * .16).toFixed(3),
+        '--seat-width': alive.length >= 8 ? '104px' : alive.length >= 7 ? '118px' : '132px',
+        '--seat-label-x': compact
+          ? `${Math.cos(angle) > .35 ? -90 : Math.cos(angle) < -.35 ? -10 : -50}%`
+          : '-50%',
+        '--seat-z': Math.round(20 + depth * 50),
+        '--seat-order': aliveIndex,
+      };
+    },
+
+    seatPoint(name) {
+      const participant = this.participants.find((item) => item.name === name);
+      if (!participant) return { x: 500, y: 310 };
+      if (participant.state === 'out') {
+        const outIndex = this.participants
+          .filter((item) => item.state === 'out')
+          .findIndex((item) => item.name === name);
+        return { x: 760 + Math.max(0, outIndex) * 55, y: 90 };
+      }
+      const alive = this.participants.filter((item) => item.state !== 'out');
+      const index = alive.findIndex((item) => item.name === name);
+      const angle = (-90 + (index * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
+      return {
+        x: 500 + Math.cos(angle) * 410,
+        y: 310 + Math.sin(angle) * 155,
+      };
+    },
+
+    participantState(name) {
+      return this.participants.find((item) => item.name === name)?.state || 'alive';
+    },
+
+    paperStyle(paper, index) {
+      const column = index % 6;
+      const row = Math.floor(index / 6);
+      return {
+        left: `${14 + column * 14.2}%`,
+        top: `${24 + row * 10.6}%`,
+        zIndex: 4 + index,
+        '--paper-rotate': `${-4 + (index % 7) * 1.35}deg`,
+        '--paper-scale': String(Math.max(.46, .66 - Math.max(0, this.tablePapers.length - 18) * .006)),
+      };
+    },
+
+    rimSpotStyle() {
+      const alive = this.participants.filter((item) => item.state !== 'out');
+      let index = alive.findIndex((item) => item.name === this.activeAgent);
+      if (index < 0) index = 0;
+      const target = (
+        (-Math.PI / 2 + (index * Math.PI * 2) / Math.max(1, alive.length))
+        + Math.PI * 2
+      ) % (Math.PI * 2);
+      const rx = 420;
+      const ry = 210;
+      const steps = 240;
+      let total = 0;
+      let walked = 0;
+      let previous = { x: rx, y: 0 };
+      for (let step = 1; step <= steps; step += 1) {
+        const angle = (step / steps) * Math.PI * 2;
+        const point = { x: rx * Math.cos(angle), y: ry * Math.sin(angle) };
+        const segment = Math.hypot(point.x - previous.x, point.y - previous.y);
+        total += segment;
+        if (angle <= target) walked += segment;
+        previous = point;
+      }
+      const fraction = total ? walked / total : 0;
+      return {
+        strokeDasharray: '.06 .94',
+        strokeDashoffset: String(-fraction + .03),
+        opacity: this.running && alive.length ? 1 : 0,
+      };
+    },
+
+    voteChipPath(chip) {
+      const from = this.seatPoint(chip.voter);
+      const to = this.seatPoint(chip.target);
+      const midX = (from.x + to.x) / 2;
+      const midY = Math.min(from.y, to.y) + 26;
+      return `M ${from.x} ${from.y} Q ${midX} ${midY} ${to.x} ${to.y}`;
+    },
+
+    addVoteChip(voter, target) {
+      if (!voter || !target || voter === target) return;
+      const id = ++this.voteChipSeq;
+      this.voteChips = [
+        ...this.voteChips.slice(-8),
+        { id, voter, target, color: agentColor(target) },
+      ];
+      window.setTimeout(() => {
+        this.voteChips = this.voteChips.filter((chip) => chip.id !== id);
+      }, 900);
+    },
+
+    voteArcStyle(name, index) {
+      const radius = 76;
+      const circumference = 2 * Math.PI * radius;
+      const values = this.participants.map((item) => Number(this.tableVoteCounts[item.name] || 0));
+      const total = Math.max(1, values.reduce((sum, value) => sum + value, 0));
+      const before = values.slice(0, index).reduce((sum, value) => sum + value, 0);
+      const length = (values[index] / total) * circumference;
+      return {
+        strokeDasharray: `${length} ${circumference - length}`,
+        strokeDashoffset: `${-((before / total) * circumference)}`,
+        opacity: values[index] > 0 ? .95 : .12,
+      };
+    },
+
+    openPaper(paper) {
+      this.openedPaper = paper;
+    },
+
+    closePaper() {
+      this.openedPaper = null;
+    },
+
+    toggleTableOverview() {
+      this.tableFocused = !this.tableFocused;
+    },
+
+    showTranscriptPanel() {
+      this.showTranscript = true;
+      this.$nextTick(() => this.scrollToTranscript());
+    },
+
+    scrollToTranscript() {
+      this.$refs.stream?.scrollIntoView({ behavior: this.reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    },
+
+    startTableIntro() {
+      if (this.replaying || this.reducedMotion) return;
+      window.clearTimeout(this._tableIntroTimer);
+      this.tableIntro = true;
+      this._tableIntroTimer = window.setTimeout(() => {
+        this.tableIntro = false;
+      }, 2550);
     },
 
     scoreFor(name) {
@@ -496,11 +769,14 @@ Vue.createApp({
     },
 
     setupStage() {
-      const canvas = this.$refs.stageCanvas;
       const stage = this.$refs.stage;
-      if (!canvas || !stage) return;
+      if (!stage) return;
       const rect = stage.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
+      this.stageWidth = rect.width;
+      this.stageHeight = rect.height;
+      const canvas = this.$refs.stageCanvas;
+      if (!canvas) return;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
@@ -722,6 +998,7 @@ Vue.createApp({
       window.clearTimeout(this._voltageTimer);
       window.clearTimeout(this._archiveTimer);
       window.clearTimeout(this._settleTimer);
+      window.clearTimeout(this._tableIntroTimer);
       Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
       this._nameTimers = {};
       this.stopAmbient();
@@ -913,6 +1190,11 @@ Vue.createApp({
       this.decodedNames = {};
       this.archiveStamp = '';
       this.settledKey = '';
+      this.tableIntro = false;
+      this.tableFocused = false;
+      this.showTranscript = false;
+      this.openedPaper = null;
+      this.voteChips = [];
       this.pointerX = 0;
       this.pointerY = 0;
       window.clearTimeout(this._fxTimer);
@@ -921,6 +1203,7 @@ Vue.createApp({
       window.clearTimeout(this._voltageTimer);
       window.clearTimeout(this._archiveTimer);
       window.clearTimeout(this._settleTimer);
+      window.clearTimeout(this._tableIntroTimer);
       Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
       this._nameTimers = {};
       this.stopTimer();
@@ -1062,7 +1345,7 @@ Vue.createApp({
           }));
           this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
           this.beginStage('', '参赛阵容已就绪');
-          this.playFx('run-start', 1450);
+          this.startTableIntro();
           this.$nextTick(this.setupStage);
           break;
 
@@ -1219,6 +1502,7 @@ Vue.createApp({
               };
               this.emitVoteTrail(ev.voter, ev.target);
               this.flashHit(ev.target);
+              this.addVoteChip(ev.voter, ev.target);
               this.sound('ding');
             }
           } else {
@@ -1341,6 +1625,7 @@ Vue.createApp({
           this.stageStartedAt = 0;
           this.votingMode = false;
           this.waitingMode = false;
+          this.tableIntro = false;
           this.stopTimer();
           this.loadHistory();
           this.scrollDown();
