@@ -169,7 +169,37 @@ async def run_events(run_id: str, request: Request, after: int = Query(default=0
 
 @router.get("/history")
 def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
-    return {"runs": database.list_runs(limit)}
+    runs = database.list_runs(limit)
+    for run in runs:
+        transcript = _read_transcript(run)
+        if not transcript:
+            continue
+        roles = transcript.get("participants") or []
+        run["participant_names"] = [
+            str(item.get("name"))
+            for item in roles
+            if isinstance(item, dict) and item.get("name")
+        ]
+        run["eliminated_names"] = [
+            str(round_record.get("eliminated"))
+            for round_record in transcript.get("rounds") or []
+            if isinstance(round_record, dict) and round_record.get("eliminated")
+        ]
+    return {"runs": runs}
+
+
+def _read_transcript(meta: dict[str, Any]) -> dict[str, Any] | None:
+    run_dir = Path(meta.get("run_dir") or "")
+    if not run_dir.is_absolute():
+        run_dir = settings.RUNS_DIR / str(meta.get("id") or "")
+    transcript_path = run_dir / "transcript.json"
+    if not transcript_path.is_file():
+        return None
+    try:
+        data = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 @router.get("/history/{run_id}")
@@ -177,14 +207,5 @@ def history_run(run_id: str) -> dict[str, Any]:
     meta = database.get_run(run_id)
     if not meta:
         raise HTTPException(status_code=404, detail="history not found")
-    transcript = None
-    run_dir = Path(meta.get("run_dir") or "")
-    if not run_dir.is_absolute():
-        run_dir = settings.RUNS_DIR / run_id
-    transcript_path = run_dir / "transcript.json"
-    if transcript_path.is_file():
-        try:
-            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            transcript = None
+    transcript = _read_transcript(meta)
     return {"meta": meta, "transcript": transcript}

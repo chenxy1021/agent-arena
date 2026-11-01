@@ -124,7 +124,7 @@ const RobotAvatar = {
         <circle v-else-if="spec.body === 'ball'" cx="32" cy="45" r="11"/>
         <polygon v-else-if="spec.body === 'trapezoid'" points="23,38 41,38 47,54 17,54"/>
         <path v-else d="M20 39h24l5 15H15z"/>
-        <path class="robot-body-light" d="M27 42h10" />
+        <path v-if="Number(size) >= 72" class="robot-body-light" d="M27 42h10" />
       </g>
 
       <g class="robot-head">
@@ -159,7 +159,7 @@ const RobotAvatar = {
         <rect x="26" y="33" width="2" height="4"/><rect x="31" y="32" width="2" height="6"/><rect x="36" y="33" width="2" height="4"/>
       </g>
 
-      <g class="robot-accessory">
+      <g v-if="Number(size) >= 48" class="robot-accessory">
         <path v-if="spec.accessory === 'headset'" d="M15 25a17 17 0 0 1 34 0M15 25v7h4v-7zm30 0v7h4v-7z"/>
         <polygon v-else-if="spec.accessory === 'tie'" points="32,38 28,42 32,51 36,42"/>
         <path v-else-if="spec.accessory === 'arm'" d="M42 43h9v3h-6l-3 4"/>
@@ -231,25 +231,23 @@ Vue.createApp({
       waitingMode: false,
       eventFx: '',
       hitAgent: '',
-      leaderFlicker: false,
       liveVoteCounts: {},
       decodedNames: {},
       archiveStamp: '',
-      settledKey: '',
       pointerX: 0,
       pointerY: 0,
       reducedMotion: false,
       stageWidth: 960,
       stageHeight: 680,
       tableIntro: false,
-      tableFocused: false,
-      showTranscript: false,
-      openedPaper: null,
+      venueScrolled: false,
       voteChips: [],
       voteChipSeq: 0,
       robotVariants: {},
       recordAgentFilter: '',
       recordRoundFilter: 0,
+      focusBeforeModal: null,
+      liveMessage: '',
     };
   },
 
@@ -288,9 +286,6 @@ Vue.createApp({
       }
       return scores;
     },
-    beamMax() {
-      return Math.max(0, ...this.participants.map((participant) => this.scoreFor(participant.name)));
-    },
     outCount() {
       return this.participants.filter((item) => item.state === 'out').length;
     },
@@ -317,20 +312,6 @@ Vue.createApp({
         '--stage-shift-x': `${(this.pointerX * 6).toFixed(2)}px`,
         '--stage-shift-y': `${(this.pointerY * 4).toFixed(2)}px`,
       };
-    },
-    tablePapers() {
-      const papers = [];
-      for (const round of this.rounds) {
-        round.speeches.forEach((speech, index) => {
-          papers.push({
-            ...speech,
-            roundNo: round.no,
-            key: `${round.no}-${index}`,
-            preview: this.paperPreview(speech.text),
-          });
-        });
-      }
-      return papers;
     },
     currentPaper() {
       if (this.final) {
@@ -419,6 +400,14 @@ Vue.createApp({
     modelPreviewKey() {
       return this.modelForm.name || this.modelForm.model || 'new-model';
     },
+    tableVoteTotal() {
+      return Object.values(this.tableVoteCounts).reduce((total, count) => total + Number(count || 0), 0);
+    },
+    voteRingLabel() {
+      const counts = this.participants
+        .map((participant) => `${participant.name} ${this.tableVoteCounts[participant.name] || 0} 票`);
+      return `当前票数：${counts.join('，')}，共 ${this.tableVoteTotal} 票`;
+    },
   },
 
   mounted() {
@@ -431,10 +420,14 @@ Vue.createApp({
     }
     this.loadModels();
     this.loadHistory();
-    this.attachActive();
+    this.applyRoute();
+    if (!window.location.hash.startsWith('#record/')) this.attachActive();
     window.addEventListener('beforeunload', this.closeStream);
     window.addEventListener('beforeunload', this.teardownStage);
     window.addEventListener('resize', this.resizeStage);
+    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('hashchange', this.applyRoute);
+    window.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$nextTick(this.setupStage);
     if (this.soundOn) {
       window.addEventListener('pointerdown', () => this.enableSound(), { once: true });
@@ -448,6 +441,9 @@ Vue.createApp({
     window.removeEventListener('beforeunload', this.closeStream);
     window.removeEventListener('beforeunload', this.teardownStage);
     window.removeEventListener('resize', this.resizeStage);
+    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('hashchange', this.applyRoute);
+    window.removeEventListener('scroll', this.handleScroll);
   },
 
   methods: {
@@ -456,19 +452,23 @@ Vue.createApp({
     newMatch() {
       this.resetArena();
       this.proposition = '';
-      this.currentPage = 'register';
+      this.goPage('register');
     },
 
     roundNo(no) {
       return String(no).padStart(2, '0');
     },
 
-    goPage(page) {
+    goPage(page, updateHash = true) {
+      if (!['register', 'venue', 'record', 'archive', 'models'].includes(page)) return;
       this.currentPage = page;
+      this.venueScrolled = false;
+      if (updateHash) this.writeRoute(page);
+      window.scrollTo({ top: 0, behavior: 'auto' });
       if (page === 'venue') this.$nextTick(this.setupStage);
     },
 
-    robotSpec(name) {
+    robotHash(name) {
       const text = String(name || 'robot');
       let hash = 2166136261;
       for (let i = 0; i < text.length; i += 1) {
@@ -479,18 +479,51 @@ Vue.createApp({
       hash = Math.imul(hash ^ (hash >>> 16), 2246822507);
       hash = Math.imul(hash ^ (hash >>> 13), 3266489909);
       hash ^= hash >>> 16;
+      return Math.abs(hash);
+    },
+
+    robotSpecWithin(name, names) {
       const heads = ['capsule', 'square', 'hex', 'crt', 'trapezoid', 'round'];
       const eyes = ['led', 'round', 'three', 'pixel', 'curve', 'grille'];
       const antennas = ['straight', 'twin', 'ring', 'ball', 'none'];
       const bodies = ['block', 'ball', 'trapezoid', 'shoulder'];
       const accessories = ['headset', 'tie', 'arm', 'gear', 'scarf', 'none'];
-      return {
-        head: heads[Math.abs(hash) % heads.length],
-        eyes: eyes[Math.abs(hash >>> 3) % eyes.length],
-        antenna: antennas[Math.abs(hash >>> 7) % antennas.length],
-        body: bodies[Math.abs(hash >>> 11) % bodies.length],
-        accessory: accessories[Math.abs(hash >>> 15) % accessories.length],
-      };
+      const pool = [...new Set((names || [name]).map((item) => String(item || 'robot')))];
+      const previous = [];
+      let current = null;
+      for (const key of pool) {
+        const hash = this.robotHash(key);
+        let candidate = null;
+        for (let shift = 0; shift < 30; shift += 1) {
+          candidate = {
+            head: heads[hash % heads.length],
+            eyes: eyes[(Math.floor(hash / 8) + shift) % eyes.length],
+            antenna: antennas[(Math.floor(hash / 128) + shift * 2) % antennas.length],
+            body: bodies[Math.floor(hash / 2048) % bodies.length],
+            accessory: accessories[Math.floor(hash / 32768) % accessories.length],
+          };
+          const distinct = previous.every((other) => (
+            Number(other.head !== candidate.head)
+            + Number(other.eyes !== candidate.eyes)
+            + Number(other.antenna !== candidate.antenna)
+          ) >= 2);
+          if (distinct) break;
+        }
+        current = candidate;
+        if (key === name) return current;
+        previous.push(current);
+      }
+      return current;
+    },
+
+    robotSpec(name) {
+      const key = String(name || 'robot');
+      const participantNames = this.participants.map((item) => item.name);
+      const modelNames = this.models.map((item) => item.name);
+      const pool = participantNames.includes(key)
+        ? participantNames
+        : modelNames.includes(key) ? modelNames : [key];
+      return this.robotSpecWithin(key, pool);
     },
 
     robotState(name) {
@@ -512,15 +545,17 @@ Vue.createApp({
     },
 
     archiveRobots(item) {
-      const count = Math.max(0, Math.min(6, Number(item.participants || 0)));
-      return Array.from({ length: count }, (_, index) => {
-        const name = index === 0 && item.winner ? item.winner : `${item.id}-archive-${index}`;
-        return {
-          name,
-          winner: index === 0 && !!item.winner,
-          out: index > 0,
-        };
-      });
+      const names = Array.isArray(item.participant_names)
+        ? item.participant_names.filter(Boolean)
+        : [];
+      if (!names.length && item.winner) names.push(item.winner);
+      const eliminated = new Set(item.eliminated_names || []);
+      return names.map((name) => ({
+        name,
+        winner: name === item.winner,
+        out: eliminated.has(name),
+        spec: this.robotSpecWithin(name, names),
+      }));
     },
 
     selectRecordAgent(name) {
@@ -542,14 +577,6 @@ Vue.createApp({
       return (round.speeches || []).filter((speech) => speech.agent === this.recordAgentFilter);
     },
 
-    paperPreview(text) {
-      return String(text || '')
-        .replace(/【(点评|观点|结论|论据|行动)】/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 22) || '本轮未完成发言';
-    },
-
     paperBlocks(text) {
       const blocks = this.speechBlocks(text);
       if (blocks.length === 1 && blocks[0].kind === 'plain' && String(text || '').includes('【结论】')) {
@@ -564,8 +591,14 @@ Vue.createApp({
       }));
     },
 
-    seatStyle(participant) {
+    orderedAlive() {
       const alive = this.participants.filter((item) => item.state !== 'out');
+      const activeIndex = alive.findIndex((item) => item.name === this.activeAgent);
+      return activeIndex > 0 ? [...alive.slice(activeIndex), ...alive.slice(0, activeIndex)] : alive;
+    },
+
+    seatStyle(participant) {
+      const alive = this.orderedAlive();
       const aliveIndex = alive.findIndex((item) => item.name === participant.name);
       if (participant.state === 'out' || aliveIndex < 0) {
         const outIndex = this.participants
@@ -581,7 +614,7 @@ Vue.createApp({
           '--seat-order': outIndex,
         };
       }
-      const angle = (-90 + (aliveIndex * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
+      const angle = (90 + (aliveIndex * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
       const depth = (Math.sin(angle) + 1) / 2;
       const compact = window.innerWidth <= 720;
       return {
@@ -608,41 +641,25 @@ Vue.createApp({
           .findIndex((item) => item.name === name);
         return { x: 760 + Math.max(0, outIndex) * 55, y: 90 };
       }
-      const alive = this.participants.filter((item) => item.state !== 'out');
+      const alive = this.orderedAlive();
       const index = alive.findIndex((item) => item.name === name);
-      const angle = (-90 + (index * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
+      const angle = (90 + (index * 360) / Math.max(1, alive.length)) * (Math.PI / 180);
       return {
         x: 500 + Math.cos(angle) * 410,
         y: 310 + Math.sin(angle) * 155,
       };
     },
 
-    participantState(name) {
-      return this.participants.find((item) => item.name === name)?.state || 'alive';
-    },
-
-    paperStyle(paper, index) {
-      const column = index % 6;
-      const row = Math.floor(index / 6);
-      return {
-        left: `${14 + column * 14.2}%`,
-        top: `${24 + row * 10.6}%`,
-        zIndex: 4 + index,
-        '--paper-rotate': `${-4 + (index % 7) * 1.35}deg`,
-        '--paper-scale': String(Math.max(.46, .66 - Math.max(0, this.tablePapers.length - 18) * .006)),
-      };
-    },
-
     rimSpotStyle() {
-      const alive = this.participants.filter((item) => item.state !== 'out');
+      const alive = this.orderedAlive();
       let index = alive.findIndex((item) => item.name === this.activeAgent);
       if (index < 0) index = 0;
       const target = (
-        (-Math.PI / 2 + (index * Math.PI * 2) / Math.max(1, alive.length))
+        (Math.PI / 2 + (index * Math.PI * 2) / Math.max(1, alive.length))
         + Math.PI * 2
       ) % (Math.PI * 2);
       const rx = 420;
-      const ry = 210;
+      const ry = 155;
       const steps = 240;
       let total = 0;
       let walked = 0;
@@ -697,25 +714,59 @@ Vue.createApp({
       };
     },
 
-    openPaper(paper) {
-      this.openedPaper = paper;
+    parseRoute() {
+      const raw = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+      const [page, id = ''] = raw.split('/');
+      return {
+        page: ['register', 'venue', 'record', 'archive', 'models'].includes(page)
+          ? page
+          : 'register',
+        id,
+      };
     },
 
-    closePaper() {
-      this.openedPaper = null;
+    writeRoute(page, id = '') {
+      const next = `#${page}${id ? `/${encodeURIComponent(id)}` : ''}`;
+      if (window.location.hash !== next) window.history.pushState(null, '', next);
     },
 
-    toggleTableOverview() {
-      this.tableFocused = !this.tableFocused;
+    applyRoute() {
+      const route = this.parseRoute();
+      this.currentPage = route.page;
+      this.venueScrolled = false;
+      if (route.page === 'record' && route.id && this.viewingHistoryId !== route.id) {
+        this.loadHistoryRun(route.id, { updateHash: false });
+      }
+      if (route.page === 'venue') this.$nextTick(this.setupStage);
     },
 
-    showTranscriptPanel() {
-      this.showTranscript = true;
-      this.goPage('record');
+    handleScroll() {
+      this.venueScrolled = this.currentPage === 'venue' && window.scrollY > 120;
     },
 
-    scrollToTranscript() {
-      this.$refs.stream?.scrollIntoView({ behavior: this.reducedMotion ? 'auto' : 'smooth', block: 'start' });
+    handleKeyDown(event) {
+      if (event.key === 'Escape' && this.showModelModal) {
+        event.preventDefault();
+        this.closeModelModal();
+        return;
+      }
+      if (event.key !== 'Tab' || !this.showModelModal || !this.$refs.modelModal) return;
+      const focusable = [...this.$refs.modelModal.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!this.$refs.modelModal.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     },
 
     startTableIntro() {
@@ -728,18 +779,7 @@ Vue.createApp({
     },
 
     scoreFor(name) {
-      return (this.scoreByName[name] || 0) + (this.liveVoteCounts[name] || 0);
-    },
-
-    beamHeight(name) {
-      const score = this.scoreFor(name);
-      const ratio = this.beamMax > 0 ? score / this.beamMax : 0;
-      const speakingBoost = name === this.activeAgent ? this.stageProgress * 0.09 : 0;
-      return Math.min(100, 9 + ratio * 81 + speakingBoost);
-    },
-
-    beamScale(name) {
-      return Math.max(.09, this.beamHeight(name) / 100);
+      return Number(this.scoreByName[name] || 0) + Number(this.liveVoteCounts[name] || 0);
     },
 
     agentModel(name) {
@@ -967,10 +1007,6 @@ Vue.createApp({
       if (kind === 'tick') tone(320, .045, 'square', .01);
     },
 
-    beamIndex(name) {
-      return this.participants.findIndex((participant) => participant.name === name);
-    },
-
     setupStage() {
       const stage = this.$refs.stage;
       if (!stage) return;
@@ -978,57 +1014,6 @@ Vue.createApp({
       if (!rect.width || !rect.height) return;
       this.stageWidth = rect.width;
       this.stageHeight = rect.height;
-      const canvas = this.$refs.stageCanvas;
-      if (!canvas) return;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      canvas.width = Math.round(rect.width * dpr);
-      canvas.height = Math.round(rect.height * dpr);
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
-      const ctx = canvas.getContext('2d', { alpha: true });
-      if (!ctx) return;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const count = Math.max(1, this.participants.length);
-      const column = rect.width / count;
-      const dust = [];
-      this.participants.forEach((participant, index) => {
-        const score = this.scoreFor(participant.name);
-        const ratio = this.beamMax ? score / this.beamMax : 0;
-        const amount = 6 + Math.round(ratio * 4);
-        for (let i = 0; i < amount; i += 1) {
-          dust.push({
-            x: (index + .5) * column + (Math.random() - .5) * column * .28,
-            y: rect.height - 38 - Math.random() * rect.height * .72,
-            speed: .012 + Math.random() * .022,
-            size: .8 + Math.random() * .9,
-            phase: Math.random() * Math.PI * 2,
-            color: agentColor(participant.name),
-          });
-        }
-      });
-      const audience = Array.from({ length: 20 }, (_, index) => ({
-        x: 18 + Math.random() * Math.max(1, rect.width - 36),
-        y: rect.height - 12 - Math.random() * 46,
-        phase: index * .61 + Math.random() * .8,
-        size: 1.2 + Math.random() * 1.4,
-      }));
-      this._scene = {
-        canvas,
-        ctx,
-        width: rect.width,
-        height: rect.height,
-        column,
-        dust,
-        audience,
-        trails: [],
-        fragments: [],
-        confetti: [],
-        startedAt: performance.now(),
-      };
-      this.scheduleVoltage();
-      this.drawStage(performance.now());
-      if (!this.reducedMotion && !this.replaying) this.startStageLoop();
     },
 
     resizeStage() {
@@ -1036,171 +1021,12 @@ Vue.createApp({
       this._resizeTimer = window.setTimeout(() => this.setupStage(), 160);
     },
 
-    startStageLoop() {
-      window.cancelAnimationFrame(this._stageFrame);
-      const frame = (now) => {
-        this.drawStage(now);
-        if (!this.reducedMotion && !this.replaying && !document.hidden) {
-          this._stageFrame = window.requestAnimationFrame(frame);
-        }
-      };
-      this._stageFrame = window.requestAnimationFrame(frame);
-    },
-
-    drawStage(now) {
-      const scene = this._scene;
-      if (!scene) return;
-      const { ctx, width, height } = scene;
-      const seconds = now / 1000;
-      ctx.clearRect(0, 0, width, height);
-
-      ctx.globalCompositeOperation = 'lighter';
-      for (const particle of scene.dust) {
-        if (!this.reducedMotion) {
-          particle.y -= particle.speed * 2.4;
-          particle.x += Math.sin(seconds * .55 + particle.phase) * .035;
-          if (particle.y < 44) particle.y = height - 42;
-        }
-        ctx.globalAlpha = .2 + Math.sin(seconds * 1.4 + particle.phase) * .08;
-        ctx.fillStyle = particle.color;
-        ctx.beginPath();
-        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      for (const seat of scene.audience) {
-        ctx.globalAlpha = .08 + (Math.sin(seconds * .7 + seat.phase) + 1) * .055;
-        ctx.fillStyle = '#dce4ff';
-        ctx.beginPath();
-        ctx.arc(seat.x, seat.y, seat.size, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      if (this.waitingMode) {
-        const x = ((now % 2400) / 2400) * width;
-        const gradient = ctx.createRadialGradient(x, height - 40, 0, x, height - 40, 70);
-        gradient.addColorStop(0, 'rgba(255,255,255,.38)');
-        gradient.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.globalAlpha = .7;
-        ctx.fillStyle = gradient;
-        ctx.fillRect(x - 70, height - 70, 140, 60);
-      }
-
-      scene.trails = scene.trails.filter((trail) => now - trail.at < 620);
-      for (const trail of scene.trails) {
-        const progress = Math.min(1, (now - trail.at) / 420);
-        const fromX = (trail.from + .5) * scene.column;
-        const toX = (trail.to + .5) * scene.column;
-        ctx.globalAlpha = (1 - progress) * .8;
-        ctx.strokeStyle = '#ff2e63';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(fromX, height - 34);
-        ctx.quadraticCurveTo((fromX + toX) / 2, height - 65, toX, height - 34);
-        ctx.stroke();
-      }
-
-      scene.fragments = scene.fragments.filter((piece) => piece.life > 0);
-      for (const piece of scene.fragments) {
-        if (!this.reducedMotion) {
-          piece.life -= .012;
-          piece.x += piece.vx;
-          piece.y += piece.vy;
-          piece.vy += .06;
-        }
-        ctx.globalAlpha = Math.max(0, piece.life);
-        ctx.fillStyle = piece.color;
-        ctx.fillRect(piece.x, piece.y, piece.size, piece.size * 1.6);
-      }
-
-      scene.confetti = scene.confetti.filter((piece) => piece.life > 0);
-      for (const piece of scene.confetti) {
-        if (!this.reducedMotion) {
-          piece.life -= .0035;
-          piece.x += piece.vx + Math.sin(seconds * 3 + piece.phase) * .25;
-          piece.y += piece.vy;
-          piece.vy += .018;
-        }
-        ctx.save();
-        ctx.globalAlpha = Math.min(1, piece.life * 1.8);
-        ctx.translate(piece.x, piece.y);
-        ctx.rotate(seconds * piece.spin + piece.phase);
-        ctx.fillStyle = piece.color;
-        ctx.fillRect(-piece.size / 2, -piece.size / 4, piece.size, piece.size / 2);
-        ctx.restore();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 1;
-    },
-
-    emitVoteTrail(voter, target) {
-      if (!this._scene) return;
-      const from = this.beamIndex(voter);
-      const to = this.beamIndex(target);
-      if (from < 0 || to < 0 || from === to) return;
-      this._scene.trails.push({ from, to, at: performance.now() });
-    },
-
-    emitEliminationParticles(name) {
-      if (!this._scene) return;
-      const index = this.beamIndex(name);
-      if (index < 0) return;
-      const scene = this._scene;
-      const x = (index + .5) * scene.column;
-      const color = agentColor(name);
-      for (let i = 0; i < 28; i += 1) {
-        scene.fragments.push({
-          x: x + (Math.random() - .5) * 26,
-          y: scene.height - 54 - Math.random() * scene.height * .55,
-          vx: (Math.random() - .5) * 1.8,
-          vy: -Math.random() * 1.1,
-          size: 1 + Math.random() * 2.4,
-          life: .7 + Math.random() * .3,
-          color,
-        });
-      }
-    },
-
-    emitWinnerConfetti() {
-      if (!this._scene) return;
-      const scene = this._scene;
-      const colors = ['#f2c14e', '#ffe7a0', '#ffffff', '#b98cff', '#4fe3c1'];
-      for (let i = 0; i < 60; i += 1) {
-        scene.confetti.push({
-          x: Math.random() * scene.width,
-          y: -10 - Math.random() * scene.height * .4,
-          vx: (Math.random() - .5) * .5,
-          vy: .55 + Math.random() * .9,
-          size: 3 + Math.random() * 4,
-          spin: (Math.random() - .5) * 4,
-          phase: Math.random() * Math.PI * 2,
-          life: .8 + Math.random() * .5,
-          color: colors[Math.floor(Math.random() * colors.length)],
-        });
-      }
-    },
-
-    scheduleVoltage() {
-      window.clearTimeout(this._voltageTimer);
-      if (this.reducedMotion) return;
-      const delay = 2600 + Math.random() * 6200;
-      this._voltageTimer = window.setTimeout(() => {
-        if (this.running && this.beamMax > 0 && !this.replaying) {
-          this.leaderFlicker = true;
-          window.setTimeout(() => { this.leaderFlicker = false; }, 130);
-        }
-        this.scheduleVoltage();
-      }, delay);
-    },
-
     teardownStage() {
-      window.cancelAnimationFrame(this._stageFrame);
       window.clearTimeout(this._resizeTimer);
       window.clearTimeout(this._fxTimer);
       window.clearTimeout(this._hitTimer);
       window.clearTimeout(this._waitingTimer);
-      window.clearTimeout(this._voltageTimer);
       window.clearTimeout(this._archiveTimer);
-      window.clearTimeout(this._settleTimer);
       window.clearTimeout(this._tableIntroTimer);
       Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
       this._nameTimers = {};
@@ -1213,7 +1039,6 @@ Vue.createApp({
         }
         this._audio = null;
       }
-      this._scene = null;
     },
 
     toggleModel(model, event) {
@@ -1240,6 +1065,7 @@ Vue.createApp({
     },
 
     openModelModal(model = null) {
+      this.focusBeforeModal = document.activeElement;
       this.modelForm = {
         name: model?.name || '',
         base_url: model?.base_url || '',
@@ -1252,6 +1078,9 @@ Vue.createApp({
       this.hint = '';
       this.hintOk = false;
       this.showModelModal = true;
+      this.$nextTick(() => {
+        this.$refs.modelModal?.querySelector('input, textarea, button')?.focus();
+      });
     },
 
     editModelInline(model = null) {
@@ -1264,6 +1093,10 @@ Vue.createApp({
       this.showModelModal = false;
       this.editingModelId = 0;
       this.hintOk = false;
+      this.$nextTick(() => {
+        if (this.focusBeforeModal instanceof HTMLElement) this.focusBeforeModal.focus();
+        this.focusBeforeModal = null;
+      });
     },
 
     async saveModel() {
@@ -1393,24 +1226,18 @@ Vue.createApp({
       this.waitingMode = false;
       this.eventFx = '';
       this.hitAgent = '';
-      this.leaderFlicker = false;
       this.liveVoteCounts = {};
       this.decodedNames = {};
       this.archiveStamp = '';
-      this.settledKey = '';
+      this.liveMessage = '';
       this.tableIntro = false;
-      this.tableFocused = false;
-      this.showTranscript = false;
-      this.openedPaper = null;
       this.voteChips = [];
       this.pointerX = 0;
       this.pointerY = 0;
       window.clearTimeout(this._fxTimer);
       window.clearTimeout(this._hitTimer);
       window.clearTimeout(this._waitingTimer);
-      window.clearTimeout(this._voltageTimer);
       window.clearTimeout(this._archiveTimer);
-      window.clearTimeout(this._settleTimer);
       window.clearTimeout(this._tableIntroTimer);
       Object.values(this._nameTimers || {}).forEach((timer) => window.clearInterval(timer));
       this._nameTimers = {};
@@ -1447,7 +1274,7 @@ Vue.createApp({
       }
       this.hint = '';
       this.resetArena();
-      this.currentPage = 'venue';
+      this.goPage('venue');
       this.running = true;
       this.status = 'running';
       this.statusText = '比赛中';
@@ -1553,6 +1380,7 @@ Vue.createApp({
             lastElapsed: 0,
           }));
           this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
+          this.liveMessage = '比赛开始，第 1 轮即将发言';
           this.beginStage('', '参赛阵容已就绪');
           this.startTableIntro();
           this.$nextTick(this.setupStage);
@@ -1582,6 +1410,7 @@ Vue.createApp({
           round.alive = ev.alive;
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
+          this.liveMessage = `第 ${ev.no} 轮开始，在场 ${ev.alive} 人`;
           this.beginStage('', `第 ${ev.no} 轮准备发言`);
           this.playFx('round-start', 550);
           this.scrollDown();
@@ -1605,6 +1434,7 @@ Vue.createApp({
           };
           this.setAgentState(ev.agent, 'thinking');
           this.liveLabel = `${ev.agent} 正在组织${ev.role}`;
+          this.liveMessage = `${ev.agent} 开始${ev.role}`;
           this.beginStage(ev.agent, `${ev.role}中，等待模型返回`);
           this.waitingMode = false;
           this.playFx('scan', 620);
@@ -1645,9 +1475,6 @@ Vue.createApp({
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
           round.speeches.push(ev);
-          this.settledKey = `${round.no}-${round.speeches.length - 1}`;
-          window.clearTimeout(this._settleTimer);
-          this._settleTimer = window.setTimeout(() => { this.settledKey = ''; }, 420);
           const outputs = { ...this.modelOutputs };
           delete outputs[ev.agent];
           this.modelOutputs = outputs;
@@ -1709,7 +1536,6 @@ Vue.createApp({
                 ...this.liveVoteCounts,
                 [ev.target]: (this.liveVoteCounts[ev.target] || 0) + 1,
               };
-              this.emitVoteTrail(ev.voter, ev.target);
               this.flashHit(ev.target);
               this.addVoteChip(ev.voter, ev.target);
               this.sound('ding');
@@ -1763,11 +1589,11 @@ Vue.createApp({
           delete this.modelOutputs[ev.agent];
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 出局，转为评审`;
+          this.liveMessage = `${ev.agent} 出局`;
           this.beginStage(ev.agent, `${ev.agent} 出局，转为评审`);
           this.votingMode = false;
           this.liveVoteCounts = {};
           this.playFx('elimination', 1650);
-          this.emitEliminationParticles(ev.agent);
           this.sound('thud');
           this.scrollDown();
           break;
@@ -1779,9 +1605,9 @@ Vue.createApp({
           delete this.modelOutputs[ev.agent];
           this.setAgentState(ev.agent, 'out');
           this.liveLabel = `${ev.agent} 技术性退赛`;
+          this.liveMessage = `${ev.agent} 技术性退赛`;
           this.beginStage(ev.agent, `${ev.agent} 技术性退赛`);
           this.playFx('elimination', 1200);
-          this.emitEliminationParticles(ev.agent);
           this.scrollDown();
           break;
         }
@@ -1790,11 +1616,11 @@ Vue.createApp({
           this.winnerName = ev.agent;
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 最终存活`;
+          this.liveMessage = `${ev.agent} 获胜`;
           this.beginStage(ev.agent, `${ev.agent} 最终存活`);
           this.votingMode = false;
           this.waitingMode = false;
           this.playFx('winner', 1600);
-          this.emitWinnerConfetti();
           this.sound('winner');
           break;
 
@@ -1803,6 +1629,7 @@ Vue.createApp({
           this.rounds.forEach((round) => { round.thinking = []; });
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 正在整理最终结论`;
+          this.liveMessage = `${ev.agent} 正在整理最终结论`;
           this.beginStage(ev.agent, '正在整理最终结论');
           this.scrollDown(true);
           break;
@@ -1852,7 +1679,7 @@ Vue.createApp({
         if (!res.ok || !data.run) return;
         if (data.run.status !== 'running') return;
         this.resetArena();
-        this.currentPage = 'venue';
+        this.goPage('venue');
         this.proposition = data.run.proposition || this.proposition;
         this.running = true;
         this.status = 'running';
@@ -1866,7 +1693,7 @@ Vue.createApp({
       }
     },
 
-    async loadHistoryRun(id) {
+    async loadHistoryRun(id, options = {}) {
       try {
         const res = await fetch(`/api/history/${encodeURIComponent(id)}`);
         const data = await res.json();
@@ -1930,6 +1757,7 @@ Vue.createApp({
         if (transcript.winner && transcript.final_answer) {
           this.final = { agent: transcript.winner, text: transcript.final_answer };
         }
+        this.currentRound = Math.max(0, ...((transcript.rounds || []).map((r) => Number(r.no) || 0)));
         this.liveLabel = '历史战报已载入';
         this.activeAgent = transcript.winner || '';
         this.activeStage = '历史回放完成';
@@ -1938,10 +1766,10 @@ Vue.createApp({
         this.pushActivity('done', `载入历史提问：${transcript.proposition || id}`, transcript.winner || '');
         this.hint = '';
         this.currentPage = 'record';
+        if (options.updateHash !== false) this.writeRoute('record', id);
         this.scrollDown(true);
         this.$nextTick(() => {
           this.setupStage();
-          this.drawStage(performance.now());
         });
       } catch (err) {
         this.hint = `历史回放失败：${err.message}`;

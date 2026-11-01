@@ -34,7 +34,7 @@
         @click="goPage(item[0])">
         {{ item[1] }}
         <i v-if="item[0] === 'venue' && running" class="nav-live-dot"></i>
-        <i v-if="item[0] === 'record' && tablePapers.length" class="nav-count">{{ tablePapers.length }}</i>
+        <i v-if="item[0] === 'record' && currentRound" class="nav-count">{{ currentRound }}</i>
       </button>
     </nav>
     <div class="report-state">
@@ -44,18 +44,12 @@
         <span aria-hidden="true">{{ soundOn ? '◉' : '○' }}</span>
         {{ soundOn ? '声音开' : '静音' }}
       </button>
-      <span class="state-word"
-        :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status">
-        {{ running ? 'LIVE · 比赛进行中' : replaying ? '历史回放' : statusText }}
-      </span>
-      <span v-if="running || replaying || elapsed" class="header-time">{{ elapsedText }}</span>
     </div>
   </header>
 
   <main class="page app-page">
     <section v-if="currentPage === 'register'" class="page-register registration">
       <header class="page-intro">
-        <span class="section-kicker">REGISTRATION · 赛事登记</span>
         <h1>让几台机器，把问题争论清楚。</h1>
         <label for="proposition">今天，让它们争论什么？</label>
         <textarea id="proposition" class="proposition-input" v-model="proposition" rows="2"
@@ -142,7 +136,6 @@
       @pointermove="moveStage">
       <header class="venue-head">
         <div>
-          <span class="section-kicker">LIVE FLOOR · 会场</span>
           <h1>{{ proposition || '未命名赛程' }}</h1>
           <div class="dossier-meta">
             <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
@@ -161,14 +154,13 @@
         </div>
       </header>
 
-      <div class="venue-compact-bar">
+      <div class="venue-compact-bar" :class="{ shown: venueScrolled }">
         <robot-avatar v-if="activeAgent" :name="activeAgent" :spec="robotSpec(activeAgent)"
           :color="agentColor(activeAgent)" :state="robotState(activeAgent)" :size="32"></robot-avatar>
         <div>
           <b>{{ activeAgent || '等待下一位发言' }}</b>
           <small>第 {{ currentRound || 0 }} 轮 · 在场 {{ participants.length - outCount }} 位</small>
         </div>
-        <span>{{ liveLabel }}</span>
         <button type="button" @click="goPage('record')">记录</button>
       </div>
 
@@ -204,12 +196,19 @@
                   <i></i><i></i>
                 </div>
                 <div v-if="votingMode || tableVoteTotal" class="table-vote-ring">
-                  <svg viewBox="0 0 200 200" aria-label="环形票数刻度">
+                  <svg viewBox="0 0 200 200" role="img" :aria-label="voteRingLabel">
                     <circle class="vote-ring-base" cx="100" cy="100" r="76"/>
                     <circle v-for="(p, voteIndex) in participants" :key="`arc-${p.name}`"
                       class="vote-ring-arc" cx="100" cy="100" r="76"
                       :stroke="agentColor(p.name)" :style="voteArcStyle(p.name, voteIndex)"/>
                   </svg>
+                  <ul class="vote-ring-labels" :aria-label="voteRingLabel">
+                    <li v-for="p in participants" :key="`ring-count-${p.name}`"
+                      :style="{ '--team-color': agentColor(p.name) }">
+                      <span>{{ displayName(p.name) }}</span>
+                      <b>{{ tableVoteCounts[p.name] || 0 }}</b>
+                    </li>
+                  </ul>
                 </div>
               </div>
             </div>
@@ -242,10 +241,7 @@
             </svg>
           </section>
 
-          <div class="venue-footline">
-            <span>{{ liveLabel }}</span>
-            <button type="button" @click="goPage('record')">查看完整记录 →</button>
-          </div>
+          <div v-if="liveMessage" class="venue-footline" aria-live="polite">{{ liveMessage }}</div>
         </div>
 
         <aside v-if="currentPaper" class="live-speech-board"
@@ -276,7 +272,7 @@
             </p>
           </div>
           <footer>
-            <span>第 {{ currentPaper.round === 'FINAL' ? '最终' : currentPaper.round + ' 轮' }}</span>
+            <span>{{ currentPaper.round === 'FINAL' ? '最终' : `第 ${currentPaper.round} 轮` }}</span>
             <div class="paper-ticks" aria-hidden="true">
               <i v-for="tick in paperTickCount" :key="tick"
                 :class="{ used: stageElapsed >= tick * 30 }"></i>
@@ -295,7 +291,6 @@
     <section v-if="currentPage === 'record'" class="record-page">
       <header class="record-page-head">
         <div>
-          <span class="section-kicker">PROCEEDINGS · 会议记录</span>
           <h1>{{ proposition || '比赛记录' }}</h1>
         </div>
         <div class="record-filters">
@@ -310,7 +305,7 @@
 
       <div class="record-layout">
         <aside class="record-timeline">
-          <span>ROUNDS</span>
+          <span>轮次</span>
           <button type="button" :class="{ active: !recordRoundFilter }" @click="recordRoundFilter = 0">
             全部轮次
           </button>
@@ -330,7 +325,6 @@
           <section v-for="round in recordVisibleRounds" :key="`record-${round.no}`"
             :data-record-round="round.no" class="record-round">
             <header>
-              <span>ROUND {{ roundNo(round.no) }}</span>
               <h2>第 {{ round.no }} 轮</h2>
               <p>在场 {{ round.alive }} 人 · {{ round.order.join(' → ') }}</p>
             </header>
@@ -410,7 +404,6 @@
     <section v-if="currentPage === 'archive'" class="archive-page">
       <header class="archive-page-head">
         <div>
-          <span class="section-kicker">ARCHIVE · 赛事档案</span>
           <h1>历史提问</h1>
           <p>每一场争论都保留完整发言、投票与裁决。</p>
         </div>
@@ -427,9 +420,9 @@
             <time>{{ item.started_at ? item.started_at.slice(0, 16) : '' }}</time>
           </header>
           <h2>{{ item.proposition }}</h2>
-          <div class="archive-robots">
+          <div v-if="archiveRobots(item).length" class="archive-robots">
             <robot-avatar v-for="robot in archiveRobots(item)" :key="robot.name"
-              :name="robot.name" :spec="robotSpec(robot.name)" :color="agentColor(robot.name)"
+              :name="robot.name" :spec="robot.spec" :color="agentColor(robot.name)"
               :state="robot.winner ? 'winner' : robot.out ? 'out' : 'idle'" :size="32"></robot-avatar>
           </div>
           <footer>
@@ -445,7 +438,6 @@
     <section v-if="currentPage === 'models'" class="models-page">
       <header class="models-page-head">
         <div>
-          <span class="section-kicker">MODEL REGISTRY · 模型</span>
           <h1>登记与管理</h1>
           <p>机器人形象由模型信息生成，登记后会自动拥有自己的工业卡通形象。</p>
         </div>
@@ -487,7 +479,7 @@
         </form>
 
         <aside class="robot-studio">
-          <span>ROBOT PREVIEW</span>
+          <span>机器人预览</span>
           <robot-avatar :name="modelPreviewKey" :spec="robotSpec(modelPreviewKey)"
             :color="agentColor(modelPreviewKey)" :size="160"></robot-avatar>
           <b>{{ modelPreviewKey }}</b>
@@ -516,23 +508,6 @@
     </section>
   </main>
 
-  <div v-if="openedPaper" class="paper-focus-backdrop" @click.self="closePaper">
-    <article class="paper-focus" :style="{ '--team-color': agentColor(openedPaper.agent) }">
-      <header>
-        <span>第 {{ openedPaper.roundNo }} 轮 · {{ openedPaper.role }}</span>
-        <b>{{ openedPaper.agent }}</b>
-        <time>{{ Number(openedPaper.elapsed || 0).toFixed(1) }}s</time>
-        <button type="button" @click="closePaper">放回桌面</button>
-      </header>
-      <div class="paper-focus-body">
-        <div v-for="(block, blockIndex) in paperBlocks(openedPaper.text)" :key="blockIndex"
-          class="paper-block" :class="{ gap: blockIndex > 0 }">
-          <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
-        </div>
-      </div>
-    </article>
-  </div>
-
   <div class="event-transition" :class="eventFx ? 'is-' + eventFx : ''" aria-hidden="true"></div>
   <div v-if="archiveStamp" class="archive-stamp">
     <span>已归档</span>
@@ -540,10 +515,9 @@
   </div>
 
   <div v-if="showModelModal" class="modal-backdrop" @click.self="closeModelModal">
-    <form class="modal" @submit.prevent="saveModel">
+    <form ref="modelModal" class="modal" @submit.prevent="saveModel">
       <div class="modal-head">
         <div>
-          <span class="section-kicker">参赛登记</span>
           <h2>{{ editingModelId ? '修改模型配置' : '登记参赛大模型' }}</h2>
           <p>兼容 OpenAI 的 <code>/chat/completions</code> 接口。密钥只保存在本机。</p>
         </div>
