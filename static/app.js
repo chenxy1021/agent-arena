@@ -7,13 +7,19 @@ const PALETTE = [
   '#9fbf87', '#c99a7a', '#7fb3bf', '#b39ac4', '#bdbd8a',
 ];
 
+const LIGHT_PALETTE = [
+  '#2f7d70', '#8b6528', '#685d91', '#9b5054', '#4e6d91',
+  '#64865a', '#9b6347', '#397d88', '#715b85', '#77742e',
+];
+
 function agentColor(name) {
+  const palette = document.documentElement.dataset.theme === 'light' ? LIGHT_PALETTE : PALETTE;
   let hash = 2166136261;
   for (let i = 0; i < String(name).length; i++) {
     hash ^= String(name).charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  return PALETTE[Math.abs(hash) % PALETTE.length];
+  return palette[Math.abs(hash) % palette.length];
 }
 
 function cleanError(data) {
@@ -27,6 +33,7 @@ Vue.createApp({
   data() {
     return {
       proposition: '',
+      theme: document.documentElement.dataset.theme || 'dark',
       mode: 'eliminate',
       timeout: 240,
       models: [],
@@ -112,6 +119,16 @@ Vue.createApp({
 
   methods: {
     agentColor,
+
+    toggleTheme() {
+      this.theme = this.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = this.theme;
+      try {
+        localStorage.setItem('arena-theme', this.theme);
+      } catch (_) {
+        // Theme still applies when storage is unavailable.
+      }
+    },
 
     modeLabel(mode) {
       return mode === 'support' ? '票少者出局' : '票多者出局';
