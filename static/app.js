@@ -1,8 +1,8 @@
 /* Agent Arena 前端：Vue 3，无构建。 */
 
-/* Printed-ink identity set. Colour is only used on labels and tally marks. */
+/* Stage-light identity set. Colour belongs to the models, not the interface. */
 const PALETTE = [
-  '#8c3b32', '#2f6157', '#4a4e86', '#a9752a', '#6b3f63', '#3d6b78',
+  '#ff6b81', '#ffc15e', '#4fe3c1', '#5fa8ff', '#b98cff', '#f27ac0',
 ];
 
 function agentColor(name) {
@@ -111,7 +111,6 @@ Vue.createApp({
       modelOutputs: {},
       modelOutputEls: {},
       modelStreamSeq: 0,
-      rosterOpen: false,
       timer: null,
     };
   },
@@ -138,6 +137,9 @@ Vue.createApp({
         }
       }
       return scores;
+    },
+    beamMax() {
+      return Math.max(0, ...this.participants.map((participant) => this.scoreFor(participant.name)));
     },
     outCount() {
       return this.participants.filter((item) => item.state === 'out').length;
@@ -176,10 +178,6 @@ Vue.createApp({
   methods: {
     agentColor,
 
-    toggleRoster() {
-      this.rosterOpen = !this.rosterOpen;
-    },
-
     newMatch() {
       this.resetArena();
       this.proposition = '';
@@ -191,6 +189,13 @@ Vue.createApp({
 
     scoreFor(name) {
       return this.scoreByName[name] || 0;
+    },
+
+    beamHeight(name) {
+      const score = this.scoreFor(name);
+      const ratio = this.beamMax > 0 ? score / this.beamMax : 0;
+      const speakingBoost = name === this.activeAgent ? this.stageProgress * 0.09 : 0;
+      return Math.min(100, 9 + ratio * 81 + speakingBoost);
     },
 
     agentModel(name) {
@@ -426,7 +431,6 @@ Vue.createApp({
       this.modelOutputs = {};
       this.modelOutputEls = {};
       this.modelStreamSeq = 0;
-      this.rosterOpen = false;
       this.stopTimer();
     },
 
@@ -632,9 +636,10 @@ Vue.createApp({
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
           round.speeches.push(ev);
-          if (ev.text && this.modelOutputs[ev.agent] && !this.modelOutputs[ev.agent].text) {
-            this.modelOutputs[ev.agent].text = ev.text;
-          }
+          const outputs = { ...this.modelOutputs };
+          delete outputs[ev.agent];
+          this.modelOutputs = outputs;
+          delete this.modelOutputEls[ev.agent];
           this.setAgentState(ev.agent, 'alive');
           const participant = this.participants.find((p) => p.name === ev.agent);
           if (participant) {

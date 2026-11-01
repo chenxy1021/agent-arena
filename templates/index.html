@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#05060c">
 <title>Agent Arena · 多智能体辩论赛</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -11,8 +12,8 @@
 <div id="app" v-cloak>
   <header class="report-head">
     <div class="brand">
-      <div class="brand-mark">
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18">
           <path d="M12 2.5 21 12l-9 10.5L3 12z" fill="none" stroke="currentColor" stroke-width="1.5"/>
         </svg>
       </div>
@@ -22,18 +23,19 @@
       </div>
     </div>
     <div class="report-state">
-      <span class="state-word" :data-state="status">
-        {{ running ? '比赛进行中' : replaying ? '历史回放' : statusText }}
+      <span class="state-word"
+        :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status">
+        {{ running ? 'LIVE · 比赛进行中' : replaying ? '历史回放' : statusText }}
       </span>
-      <span v-if="running || replaying || elapsed" class="state-time">{{ elapsedText }}</span>
+      <span v-if="running || replaying || elapsed" class="header-time">{{ elapsedText }}</span>
     </div>
   </header>
 
   <main class="page">
     <section v-if="!participants.length && !rounds.length && !running" class="registration">
       <div class="registration-intro">
-        <span class="section-kicker">赛事登记</span>
-        <label for="proposition">辩题</label>
+        <span class="section-kicker">ARENA REGISTRATION · 赛事登记</span>
+        <label for="proposition">今天，让它们争论什么？</label>
         <textarea id="proposition" class="proposition-input" v-model="proposition" rows="2"
           placeholder="写下今天要辩的命题"
           @keydown.meta.enter="startMatch" @keydown.ctrl.enter="startMatch"></textarea>
@@ -56,7 +58,7 @@
               @click="mode = 'support'">
               <span class="rule-stamp">已选</span>
               <b>评选制</b>
-              <small>投最该留，票少者出局</small>
+              <small>投观点最正确，票少者出局</small>
             </button>
           </div>
           <p class="form-note">首轮只发表观点，不投票；从第二轮结束起开始投票淘汰。</p>
@@ -81,7 +83,8 @@
               @click="toggleModel(m, $event)">
               <input type="checkbox" :checked="m.checked"
                 @click.stop @change="m.checked = $event.target.checked">
-              <span class="model-ink" :style="{ background: agentColor(m.name) }"></span>
+              <span class="model-ink"
+                :style="{ '--team-color': agentColor(m.name), background: agentColor(m.name) }"></span>
               <span class="model-copy">
                 <b>{{ m.name }}</b>
                 <small>{{ m.model }}</small>
@@ -108,41 +111,74 @@
       </div>
     </section>
 
-    <section v-else class="match-view">
-      <header class="dossier-head">
-        <div class="dossier-topline">
-          <span class="section-kicker">{{ replaying ? '赛事存档' : '正在记录' }}</span>
+    <section v-else class="match-view"
+      :class="{
+        'is-done': !!winnerName,
+        'is-replaying': replaying,
+        'is-tiebreak': activeStage.includes('加赛')
+      }"
+      :data-state="running ? 'running' : replaying ? 'replay' : winnerName ? 'done' : status">
+      <header class="show-head">
+        <div class="show-topline">
+          <span class="section-kicker">{{ replaying ? 'ARCHIVE · 赛事存档' : 'LIVE SHOW · 正在记录' }}</span>
           <button type="button" class="text-action" :disabled="running" @click="newMatch">
             {{ running ? '比赛进行中' : '＋ 重新登记一场' }}
           </button>
         </div>
-        <h1>{{ proposition || '未命名赛程' }}</h1>
-        <div class="dossier-meta">
-          <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
-          <span><small>限时</small>{{ timeout }} 秒</span>
-          <span><small>参赛</small>{{ participants.length }} 位</span>
-          <span><small>轮次</small>第 {{ currentRound || 0 }} 轮</span>
+
+        <div class="show-main">
+          <div class="show-copy">
+            <h1>{{ proposition || '未命名赛程' }}</h1>
+            <div class="dossier-meta">
+              <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
+              <span><small>限时</small>{{ timeout }} 秒</span>
+              <span><small>参赛</small>{{ participants.length }} 位</span>
+              <span><small>轮次</small>第 {{ currentRound || 0 }} 轮</span>
+            </div>
+          </div>
+
+          <div class="arena-clock">
+            <span class="clock-label">{{ replaying ? 'RECORDED' : running ? 'LIVE' : 'CLOCK' }}</span>
+            <strong>{{ elapsedText }}</strong>
+            <div class="clock-speaker">
+              <span>{{ activeAgent || (running ? '等待发言' : '—') }}</span>
+              <time>{{ stageElapsedText }}</time>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-progress" aria-hidden="true">
+          <i :style="{ width: Math.max(0, Math.min(100, stageProgress)) + '%' }"></i>
         </div>
       </header>
 
-      <section class="participant-band">
-        <button type="button" class="roster-toggle" @click="toggleRoster">
-          <span>{{ participants.length }} 位参赛 · {{ outCount }} 位出局</span>
-          <b>{{ rosterOpen ? '收起名单' : '查看名单' }}</b>
-        </button>
-        <div class="roster" :class="{ open: rosterOpen }">
-          <div v-for="p in participants" :key="p.name" class="roster-item"
-            :class="{ out: p.state === 'out' }"
-            :style="{ '--team-color': agentColor(p.name) }">
-            <div class="roster-name">
-              <span>{{ p.name }}</span>
+      <section class="stage" aria-label="参赛模型追光舞台">
+        <div class="stage-ambient" aria-hidden="true"></div>
+        <div class="stage-lights">
+          <article v-for="(p, index) in participants" :key="p.name" class="beam"
+            :class="{
+              active: running && p.name === activeAgent,
+              thinking: p.state === 'thinking',
+              out: p.state === 'out'
+            }"
+            :style="{
+              '--team-color': agentColor(p.name),
+              '--beam-height': beamHeight(p.name) + '%',
+              '--beam-delay': (index * 90) + 'ms'
+            }">
+            <span class="beam-score">{{ scoreFor(p.name) }}</span>
+            <span class="beam-shaft"><i></i></span>
+            <span class="beam-spot"></span>
+            <div class="beam-caption">
+              <b>{{ p.name }}</b>
               <small v-if="p.state === 'out'">出局</small>
+              <small v-else-if="running && p.name === activeAgent">发言中</small>
               <small v-else-if="p.state === 'thinking'">思考中</small>
               <small v-else>在场</small>
             </div>
-            <tally-marks :count="scoreFor(p.name)" color="#e9e8e2"></tally-marks>
-          </div>
+          </article>
         </div>
+        <div class="stage-floor" aria-hidden="true"></div>
       </section>
 
       <div class="match-statusline">
@@ -152,21 +188,21 @@
         </div>
         <div class="status-time">
           <span v-if="winnerName">胜者 {{ winnerName }}</span>
-          <span v-else>{{ elapsedText }}</span>
+          <span v-else>{{ participants.length }} 位参赛 · {{ outCount }} 位出局</span>
         </div>
       </div>
 
       <div ref="stream" class="stream">
         <div v-if="!rounds.length" class="match-pending">
           <div class="pending-mark"></div>
-          <p>{{ running ? '正在登记本轮参赛者，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
+          <p>{{ running ? '舞台已经亮起，第一位发言即将开始。' : '这份赛程还没有轮次记录。' }}</p>
         </div>
 
         <section v-for="round in rounds" :key="round.no" class="round-paper"
           :class="{ current: round.no === currentRound }">
           <aside class="round-index">
             <span>{{ roundNo(round.no) }}</span>
-            <small>轮次</small>
+            <small>ROUND</small>
           </aside>
 
           <div class="round-sheet">
@@ -180,6 +216,20 @@
 
             <div class="round-columns">
               <div class="speech-column">
+                <div v-if="round.no === currentRound && running && modelStreams.length"
+                  class="live-stream-stack">
+                  <article v-for="stream in modelStreams" :key="`stream-${stream.agent}`"
+                    class="stream-card" :class="{ active: stream.agent === activeAgent }"
+                    :style="{ '--team-color': agentColor(stream.agent) }">
+                    <header>
+                      <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
+                      <span>{{ stream.role }}</span>
+                      <i v-if="stream.agent === activeAgent" class="stream-pulse"></i>
+                    </header>
+                    <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
+                  </article>
+                </div>
+
                 <article v-for="(speech, idx) in round.speeches" :key="`s-${idx}`"
                   class="speech" :class="{ error: !!speech.error }"
                   :style="{ '--team-color': agentColor(speech.agent) }">
@@ -203,6 +253,7 @@
                 </article>
 
                 <div v-for="item in round.thinking" :key="`t-${item.agent}-${item.role}`"
+                  v-show="!modelStreams.some((stream) => stream.agent === item.agent)"
                   class="speech pending-speech" :style="{ '--team-color': agentColor(item.agent) }">
                   <header class="speech-head">
                     <span class="speech-ticket">
@@ -219,90 +270,76 @@
               </div>
 
               <aside class="decision-column">
-                <template v-if="round.votes || round.tiebreakSteps?.length || (round.no === currentRound && running)">
-                  <div class="ledger-title">投票与裁决</div>
+                <div class="ledger-title">投票与裁决</div>
 
-                  <div v-if="round.tiebreakSteps?.length" class="tiebreak-trail">
-                    <div v-for="step in round.tiebreakSteps" :key="`tb-${step.attempt}`"
-                      class="tiebreak-step" :class="{ resolved: step.status === 'decided' }">
-                      <b>第 {{ step.attempt }} 次加赛</b>
-                      <span>{{ step.agents?.join('、') }}</span>
-                      <p v-if="step.removed?.length">移出投票人：{{ step.removed.join('、') }}</p>
-                      <p v-else>同票者重新发言后，由{{ step.voters }} 位投票人重投。</p>
-                    </div>
+                <div v-if="round.tiebreakSteps?.length" class="tiebreak-trail">
+                  <div v-for="step in round.tiebreakSteps" :key="`tb-${step.attempt}`"
+                    class="tiebreak-step" :class="{ resolved: step.status === 'decided' }">
+                    <b>第 {{ step.attempt }} 次加赛</b>
+                    <span>{{ step.agents?.join('、') }}</span>
+                    <p v-if="step.removed?.length">移出投票人：{{ step.removed.join('、') }}</p>
+                    <p v-else>同票者重新发言后，由 {{ step.voters }} 位投票人重投。</p>
                   </div>
+                </div>
 
-                  <div v-for="group in voteStageGroups(round.votes)" :key="group.stage"
-                    class="vote-stage">
-                    <div class="vote-stage-head">
-                      <b>{{ group.label }}</b>
-                      <span>{{ group.rows.length }} 票</span>
-                    </div>
-                    <div v-for="entry in voteBars(group.counts)" :key="`${group.stage}-${entry.name}`"
-                      class="vote-tally-row" :class="{ lead: entry.lead }">
-                      <span class="vote-name">{{ entry.name }}</span>
-                      <tally-marks :count="entry.count"
-                        :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
-                    </div>
-                    <div v-if="!voteBars(group.counts).length" class="ledger-empty">无有效票</div>
-
-                    <div class="vote-detail-head">逐票记录</div>
-                    <div v-for="(row, vi) in group.rows" :key="`v-${group.stage}-${vi}`" class="vote-record">
-                      <div class="vote-record-main">
-                        <span>
-                          {{ row.voter }}
-                          <small v-if="row.is_judge">评委</small>
-                          <small v-if="row.stage && row.stage !== 'main'">{{ voteStageLabel(row.stage) }}</small>
-                        </span>
-                        <b>投给 {{ row.target || '未投' }}</b>
-                      </div>
-                      <p>{{ row.reason || row.error || '未说明理由' }}</p>
-                    </div>
+                <div v-for="group in voteStageGroups(round.votes)" :key="group.stage"
+                  class="vote-stage">
+                  <div class="vote-stage-head">
+                    <b>{{ group.label }}</b>
+                    <span>{{ group.rows.length }} 票</span>
                   </div>
-
-                  <div v-if="liveVotingRows(round).length" class="vote-stage live-vote-stage">
-                    <div class="vote-stage-head">
-                      <b>{{ currentVoteStage(round) }}</b>
-                      <span>收票中</span>
-                    </div>
-                    <div v-for="row in liveVotingRows(round)" :key="`live-${row.voter}`"
-                      class="live-vote-row">
-                      <span>{{ row.voter }}<small v-if="row.is_judge">评委</small></span>
-                      <b v-if="row.status === 'done'">投给 {{ row.target }}</b>
-                      <b v-else-if="row.status === 'error'" class="vote-error">投票失败</b>
-                      <b v-else>正在判断…</b>
-                    </div>
+                  <div v-for="entry in voteBars(group.counts)" :key="`${group.stage}-${entry.name}`"
+                    class="vote-tally-row" :class="{ lead: entry.lead }">
+                    <span class="vote-name">{{ entry.name }}</span>
+                    <tally-marks :count="entry.count"
+                      :color="entry.lead ? agentColor(entry.name) : 'var(--ink)'"></tally-marks>
                   </div>
+                  <div v-if="!voteBars(group.counts).length" class="ledger-empty">无有效票</div>
 
-                  <template v-if="round.no === currentRound && running">
-                    <div class="trace-head">现场记录</div>
-                    <div v-if="modelStreams.length" class="live-output-list">
-                      <article v-for="stream in modelStreams" :key="stream.agent" class="live-output">
-                        <header>
-                          <b>{{ stream.agent }}<small v-if="agentModel(stream.agent)"> · {{ agentModel(stream.agent) }}</small></b>
-                          <span>{{ stream.role }}</span>
-                        </header>
-                        <pre :ref="(el) => bindOutputEl(stream.agent, el)">{{ stream.text || '等待首个字符…' }}</pre>
-                      </article>
+                  <div class="vote-detail-head">逐票记录</div>
+                  <div v-for="(row, vi) in group.rows" :key="`v-${group.stage}-${vi}`" class="vote-record">
+                    <div class="vote-record-main">
+                      <span>
+                        {{ row.voter }}
+                        <small v-if="row.is_judge">评委</small>
+                        <small v-if="row.stage && row.stage !== 'main'">{{ voteStageLabel(row.stage) }}</small>
+                      </span>
+                      <b>投给 {{ row.target || '未投' }}</b>
                     </div>
-                    <div v-else class="ledger-empty">等待模型返回本轮信息。</div>
-
-                    <ol v-if="activity.length" class="trace-list">
-                      <li v-for="item in activity.slice(0, 8)" :key="item.id">
-                        <time>{{ item.clock }}</time>
-                        <span>{{ activityKind(item.kind) }}</span>
-                        <p>{{ item.text }}</p>
-                      </li>
-                    </ol>
-                  </template>
-                </template>
-
-                <template v-else>
-                  <div class="ledger-title">本轮记录</div>
-                  <div class="ledger-empty">
-                    {{ round.no === 1 ? '首轮只发表观点，不进行投票。' : '本轮没有可展示的计票记录。' }}
+                    <p>{{ row.reason || row.error || '未说明理由' }}</p>
                   </div>
-                </template>
+                </div>
+
+                <div v-if="liveVotingRows(round).length" class="vote-stage live-vote-stage">
+                  <div class="vote-stage-head">
+                    <b>{{ currentVoteStage(round) }}</b>
+                    <span>收票中</span>
+                  </div>
+                  <div v-for="row in liveVotingRows(round)" :key="`live-${row.voter}`"
+                    class="live-vote-row">
+                    <span>{{ row.voter }}<small v-if="row.is_judge">评委</small></span>
+                    <b v-if="row.status === 'done'">投给 {{ row.target }}</b>
+                    <b v-else-if="row.status === 'error'" class="vote-error">投票失败</b>
+                    <b v-else>正在判断…</b>
+                  </div>
+                </div>
+
+                <div v-if="round.no === currentRound && running" class="trace-block">
+                  <div class="trace-head">执行轨迹</div>
+                  <ol v-if="activity.length" class="trace-list">
+                    <li v-for="item in activity.slice(0, 10)" :key="item.id">
+                      <time>{{ item.clock }}</time>
+                      <span>{{ activityKind(item.kind) }}</span>
+                      <p>{{ item.text }}</p>
+                    </li>
+                  </ol>
+                  <div v-else class="ledger-empty">等待赛务事件。</div>
+                </div>
+
+                <div v-if="!round.votes && !round.tiebreakSteps?.length && !(round.no === currentRound && running)"
+                  class="ledger-empty">
+                  {{ round.no === 1 ? '首轮只发表观点，不进行投票。' : '本轮没有可展示的计票记录。' }}
+                </div>
               </aside>
             </div>
 
@@ -316,6 +353,7 @@
         </section>
 
         <article v-if="final" class="winner-sheet">
+          <div class="winner-glow" aria-hidden="true"></div>
           <div class="winner-seal">
             <span>胜</span>
             <small>WINNER</small>
@@ -332,13 +370,12 @@
           </div>
         </article>
       </div>
-
     </section>
 
     <section class="archive-section">
       <div class="section-heading archive-heading">
         <div>
-          <span class="section-kicker">赛事档案</span>
+          <span class="section-kicker">ARCHIVE · 赛事档案</span>
           <h2>历史提问</h2>
         </div>
         <button type="button" class="text-action" :disabled="historyLoading" @click="loadHistory">
