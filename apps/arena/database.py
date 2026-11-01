@@ -226,6 +226,22 @@ def sync_run_history(runs_dir: Path | None = None, db_path: Path | None = None) 
     if not root.is_dir():
         return
     init_db(db_path)
+    with _connect(db_path) as conn:
+        # 同一 run_dir 只保留最新一条，清理旧版启动同步造成的重复记录。
+        conn.execute(
+            """
+            DELETE FROM runs
+            WHERE run_dir <> ''
+              AND EXISTS (
+                SELECT 1 FROM runs newer
+                WHERE newer.run_dir = runs.run_dir
+                  AND (
+                    newer.created_ts > runs.created_ts
+                    OR (newer.created_ts = runs.created_ts AND newer.id > runs.id)
+                  )
+              )
+            """
+        )
     for run_dir in sorted(root.iterdir()):
         transcript = run_dir / "transcript.json"
         if not transcript.is_file():
@@ -239,7 +255,13 @@ def sync_run_history(runs_dir: Path | None = None, db_path: Path | None = None) 
             created_ts = time.mktime(time.strptime(created, "%Y-%m-%d %H:%M:%S"))
         except (TypeError, ValueError):
             created_ts = run_dir.stat().st_mtime
+        resolved_dir = str(run_dir.resolve())
         with _connect(db_path) as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM runs WHERE run_dir = ? LIMIT 1", (resolved_dir,)
+            ).fetchone()
+            if exists:
+                continue
             conn.execute(
                 """
                 INSERT OR IGNORE INTO runs
@@ -256,7 +278,7 @@ def sync_run_history(runs_dir: Path | None = None, db_path: Path | None = None) 
                     data.get("duration"),
                     created,
                     created,
-                    str(run_dir.resolve()),
+                    resolved_dir,
                     created_ts,
                 ),
             )

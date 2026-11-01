@@ -36,6 +36,42 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertEqual(rows[0]["winner"], "mock#1")
         self.assertEqual(rows[0]["status"], "done")
 
+    def test_sync_does_not_duplicate_existing_run_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "runs" / "20260101-120000"
+            run_dir.mkdir(parents=True)
+            (run_dir / "transcript.json").write_text(
+                json.dumps(
+                    {
+                        "proposition": "同一场",
+                        "vote_mode": "eliminate",
+                        "winner": "mock#1",
+                        "participants": [{"name": "mock#1"}, {"name": "mock#2"}],
+                        "duration": 8.0,
+                        "started_at": "2026-01-01 12:00:00",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            db_path = root / "arena.db"
+            database.create_run(
+                run_id="modern-run",
+                proposition="同一场",
+                vote_mode="eliminate",
+                participants=2,
+                started_at="2026-01-01 12:00:00",
+                run_dir=str(run_dir.resolve()),
+                db_path=db_path,
+            )
+            database.sync_run_history(runs_dir=root / "runs", db_path=db_path)
+            database.sync_run_history(runs_dir=root / "runs", db_path=db_path)
+            rows = database.list_runs(db_path=db_path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], "modern-run")
+
     def test_finish_run_updates_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "arena.db"

@@ -505,6 +505,13 @@ button { color: inherit; }
   border-bottom: 2px solid var(--ink);
 }
 
+.dossier-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
 .dossier-head h1 {
   max-width: 22em;
   margin: 12px 0 20px;
@@ -1079,18 +1086,6 @@ button { color: inherit; }
   font-weight: 600;
 }
 
-.match-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 18px 0;
-  border-top: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong);
-  color: var(--gray);
-  font-size: 12px;
-}
-
 /* ---------- 登记弹层 ---------- */
 .modal-backdrop {
   position: fixed;
@@ -1401,7 +1396,6 @@ button { color: inherit; }
   .tally-glyph { width: 13px; height: 18px; }
   .winner-sheet { grid-template-columns: 1fr; }
   .winner-seal { width: 58px; height: 58px; }
-  .match-actions { align-items: flex-start; flex-direction: column; }
   .modal-backdrop { padding: 14px; }
   .modal { padding: 18px; box-shadow: 4px 4px 0 var(--ink); }
 }

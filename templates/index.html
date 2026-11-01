@@ -110,7 +110,12 @@
 
     <section v-else class="match-view">
       <header class="dossier-head">
-        <div class="section-kicker">{{ replaying ? '赛事存档' : '正在记录' }}</div>
+        <div class="dossier-topline">
+          <span class="section-kicker">{{ replaying ? '赛事存档' : '正在记录' }}</span>
+          <button type="button" class="text-action" :disabled="running" @click="newMatch">
+            {{ running ? '比赛进行中' : '＋ 重新登记一场' }}
+          </button>
+        </div>
         <h1>{{ proposition || '未命名赛程' }}</h1>
         <div class="dossier-meta">
           <span><small>规则</small>{{ mode === 'support' ? '评选制' : '淘汰制' }}</span>
@@ -296,10 +301,6 @@
         </article>
       </div>
 
-      <div class="match-actions">
-        <button type="button" class="text-action" @click="newMatch">重新登记一场</button>
-        <span>{{ running ? '比赛进行中，请等待本轮记录完成' : '本场赛程已归档' }}</span>
-      </div>
     </section>
 
     <section class="archive-section">
