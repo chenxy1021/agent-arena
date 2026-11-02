@@ -8,45 +8,66 @@
 ![SQLite](https://img.shields.io/badge/SQLite-embedded-003B57?logo=sqlite&logoColor=white)
 
 <div align="center">
-  <img src="docs/screenshots/arena.png" alt="Agent Arena live debate room" width="92%">
+  <img src="docs/screenshots/arena.png" alt="Agent Arena review chamber" width="92%">
 </div>
 
-**Put multiple LLMs at the same table, make them challenge each other, and keep the whole decision process auditable.**
+**Put multiple LLMs at the same table: compare executable plans with an independent judge, or make the models debate and eliminate one another.**
 
-Agent Arena is a local-first multi-model debate app. Models answer the same
-question, critique the previous round, vote in parallel, and keep debating until
-one conclusion survives. The output is a readable transcript, not an opaque
-"ask several models and merge" prompt.
+Agent Arena is a local-first multi-model decision arena with two modes:
 
-The app shows observable provider output only. It does not invent hidden
-chain-of-thought. When a compatible provider returns `reasoning_content` or
-`reasoning`, that streamed text is displayed as the provider exposed it.
+- **Plan review** is the default. Models answer independently, an independent
+  judge scores anonymized and shuffled plans, and the result includes a ranking,
+  a recommendation, rejection reasons, and an integrated action plan.
+- **Elimination debate** makes models challenge one another across rounds,
+  vote in parallel, eliminate the weakest case, and preserve the full argument
+  trail.
+
+The output is an auditable transcript, not an opaque "ask several models and
+merge" prompt. The interface only displays provider-visible output. It does not
+invent hidden chain-of-thought; when a compatible provider returns
+`reasoning_content` or `reasoning`, that streamed text is shown as exposed.
 
 ## What It Does
 
 | Area | Capability |
 | --- | --- |
 | Models | Register any OpenAI Chat Completions-compatible endpoint |
-| Debate | Independent opening, cross-round critique, voting, elimination, tiebreaks |
-| Display | Buffered parallel speeches or live sequential streaming |
-| Decisions | Eliminate the weakest case or keep the strongest case |
-| Evidence | Multi-dimensional scores, claim ledger, stance spread, round transcript |
-| Reliability | Concurrent voting, request timeouts, retries, stop control, SSE heartbeats |
-| Records | Searchable history, final decision first, reusable run presets |
-| Interface | Responsive desktop/mobile UI, light/dark themes, Chinese and English switching |
+| Plan review | Parallel independent answers, anonymous shuffled judging, four-dimension scores, recommendation and synthesis |
+| Debate | Independent opening, cross-round critique, parallel voting, elimination, tiebreaks and final summary |
+| Decisions | Default to the most executable plan, or keep the strongest case in debate |
+| Evidence | Score matrix, rejection reasons, claim ledger, stance spread and complete round transcript |
+| Reliability | Timeouts, retries, stop control, SSE progress heartbeats and explicit failure diagnostics |
+| Records | Mode-aware history, searchable archive, reusable presets and no cross-mode mixed ranking |
+| Interface | Responsive desktop/mobile UI, daylight/dark themes, Chinese and English switching |
+
+## Two Modes
+
+| | Plan Review | Elimination Debate |
+| --- | --- | --- |
+| Best for | Fast comparison of executable plans | Stress-testing a contested position |
+| Participants | 2-8 models | 2-8 models |
+| Judge | One independent model outside the lineup | Participants vote on one another |
+| Typical cost | `N + 2` calls | Multi-round, usually slower |
+| Output | Comparison matrix, recommendation, rejection reasons, synthesis | Winner or undecided result with the full debate trail |
+| Default | Yes | Optional deep-dive mode |
+
+Review judging is anonymous and deterministic-order shuffled. The judge sees
+`方案1...方案N`, not model names. Every non-recommended plan receives a concrete
+rejection reason, and the final synthesis must state its assumptions and failure
+conditions.
 
 ## Interface
 
-| Setup | Record |
+| Setup | Review record |
 | --- | --- |
-| ![Setup](docs/screenshots/register.png) | ![Record](docs/screenshots/record.png) |
+| ![Setup](docs/screenshots/register.png) | ![Review record](docs/screenshots/record.png) |
 | **Archive compare** | **Light mode** |
 | ![Archive compare](docs/screenshots/archive.png) | ![Light mode](docs/screenshots/arena-light.png) |
 
-The live room keeps generation, voting, tiebreak, and archive progress visible.
-Each ballot is drawn as a directional trace and repeated in a clear voter-to-target
-board. Compare view uses one alignment grid, so every archive row starts on the
-same baseline. A daylight theme is available from the top bar and persists locally.
+The live review chamber shows each plan as it arrives, the judging phases, the
+four-dimension comparison, recommendation, rejection reasons and integration
+steps. The debate room keeps generation, voting, tiebreak and archive progress
+visible. The daylight theme and language selection persist locally.
 
 ## Quick Start
 
@@ -54,7 +75,9 @@ Requirements:
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
-- At least two model configurations that support `POST /chat/completions`
+- For review mode, at least three model configurations: two participants and one
+  independent judge
+- For debate mode, at least two model configurations
 
 ```bash
 git clone https://github.com/chenxy1021/agent-arena.git
@@ -78,13 +101,15 @@ uv run uvicorn config.asgi:app --reload
 
 First run:
 
-1. Open **Models** and register two or more models.
-2. Open **Setup**, select the lineup, and enter a proposition.
-3. Choose the speech mode and decision rule.
-4. Start the match.
+1. Open **Models** and register the endpoints you want to use.
+2. Open **Setup** and choose **Plan Review** or **Elimination Debate**.
+3. Select 2-8 participants. For plan review, also select a judge that is not in
+   the participant list.
+4. Enter the proposition, background, constraints and evaluation notes.
+5. Start the run.
 
-**Preview match** uses local frontend demo data. It does not call a provider or
-overwrite saved model configurations.
+**Preview match** uses local frontend mock data. It does not call a provider,
+create a backend run, or overwrite saved model configurations.
 
 ## Provider Contract
 
@@ -103,7 +128,7 @@ Model ID: gpt-4.1
 ```
 
 Streaming is enabled by default. Provider features such as reasoning fields,
-tool calls, multimodal input, and streamed token usage vary. Unsupported fields
+tool calls, multimodal input and streamed token usage vary. Unsupported fields
 are ignored rather than fabricated.
 
 ## Architecture
@@ -112,32 +137,37 @@ are ignored rather than fabricated.
 flowchart LR
     UI[Vue 3 interface] -->|REST + SSE| API[FastAPI routes]
     API --> MANAGER[Run manager]
-    MANAGER --> ARENA[Debate engine]
-    ARENA --> PROVIDERS[OpenAI-compatible adapters]
+    MANAGER --> REVIEW[Plan review engine]
+    MANAGER --> DEBATE[Debate engine]
+    REVIEW --> PROVIDERS[OpenAI-compatible adapters]
+    DEBATE --> PROVIDERS
     MANAGER --> DB[(SQLite)]
-    ARENA --> RUNS[transcript.json + debate.md]
+    REVIEW --> REVIEWRUNS[transcript.json + review.md]
+    DEBATE --> DEBATERUNS[transcript.json + debate.md]
 ```
 
 The execution model is a deterministic pipeline with parallel fan-out and
-fan-in per round, not an autonomous multi-agent swarm:
+fan-in, not an autonomous multi-agent swarm:
 
-1. The run manager creates one isolated run.
-2. The debate engine builds every prompt and applies the tournament rules.
-3. Model calls run in parallel where the rules allow it.
-4. Ballots are parsed against the current JSON schema.
-5. Results are emitted over SSE and archived locally.
+1. The run manager creates one isolated run and validates the mode, lineup and
+   judge independence.
+2. Plan review fans out independent answers, anonymizes and shuffles valid
+   plans, then asks the judge for structured scoring and synthesis.
+3. Debate builds every prompt and applies the tournament state machine, voting
+   weights and tiebreak rules.
+4. Results are emitted over SSE and archived locally.
 
-This keeps costs, ordering, cancellation, and transcript generation predictable.
+This keeps costs, ordering, cancellation and transcript generation predictable.
 
 ### Why not SQLModel?
 
 The current persistence layer has two small tables and no user accounts,
-relationships, sessions, or migration pipeline. The standard-library `sqlite3`
+relationships, sessions or migration pipeline. The standard-library `sqlite3`
 driver is direct and sufficient. SQLModel would add a dependency and session
 machinery before removing meaningful application code.
 
 Revisit SQLModel when the product adds users, per-user API key ownership, shared
-deployments, or schema migrations. At that point an ORM and migration tool solve
+deployments or schema migrations. At that point an ORM and migration tool solve
 real problems rather than hypothetical ones.
 
 ### Why not LangChain?
@@ -145,24 +175,25 @@ real problems rather than hypothetical ones.
 The important behavior here sits below a generic agent framework:
 
 - exact SSE delta forwarding and provider-visible reasoning;
-- timeout, retry, and cancellation semantics;
-- deterministic ballot parsing and tiebreaks;
+- timeout, retry and cancellation semantics;
+- deterministic structured judging and ballot parsing;
 - stable event ordering for the live room;
-- reproducible transcripts.
+- reproducible transcripts and mode-specific comparability.
 
-LangChain does not provide the debate rules, and inserting an abstraction layer
-between the arena and provider responses would make the core UX harder to
-control. LangChain becomes relevant if the roadmap adds tool-using research
-agents, external retrievers, or a graph of dependent tasks. The tournament itself
-should remain an explicit state machine.
+LangChain does not provide the review rubric or debate rules, and inserting an
+abstraction layer between the arena and provider responses would make the core
+UX harder to control. LangChain becomes relevant if the roadmap adds tool-using
+research agents, external retrievers or a graph of dependent tasks. The arena
+itself should remain an explicit state machine.
 
 ## Project Layout
 
 ```text
 arena.py                  local server launcher
 apps/arena/api.py         HTTP routes and SSE
-apps/arena/services.py    run lifecycle and cancellation
-apps/arena/moderator.py   debate rules, voting, tiebreaks, transcript model
+apps/arena/services.py    run lifecycle, mode dispatch and cancellation
+apps/arena/review.py      plan review, anonymous judging and synthesis
+apps/arena/moderator.py   debate rules, voting, tiebreaks and transcript model
 apps/arena/providers.py   OpenAI-compatible streaming adapter
 apps/arena/database.py    SQLite model registry and history index
 apps/arena/report.py      JSON and Markdown reports
@@ -181,23 +212,24 @@ tests/                    mock and loopback tests
 | `PUT` | `/api/models/{id}` | Update a model |
 | `DELETE` | `/api/models/{id}` | Delete a model |
 | `POST` | `/api/models/suggest-name` | Ask a model for a display name |
-| `POST` | `/api/runs` | Create and start a match |
+| `POST` | `/api/runs` | Create and start a review or debate run |
 | `POST` | `/api/runs/{id}/stop` | Request cancellation |
 | `GET` | `/api/runs/active` | Read the active run |
 | `GET` | `/api/runs/{id}/events` | Subscribe to the SSE stream |
-| `GET` | `/api/history` | List archived matches |
+| `GET` | `/api/history` | List archived runs with mode metadata |
 | `GET` | `/api/history/{id}` | Read a transcript |
 | `GET` | `/api/history/{id}/preset` | Build a reusable run preset |
 
-SSE events include speech streams, waiting heartbeats, parallel progress, vote
-progress, scores, tiebreaks, eliminations, claims, convergence, and archive
-completion.
+Review SSE events include independent answer progress, anonymized labels,
+judge retries, score results, recommendation and synthesis. Debate SSE events
+include speech streams, waiting heartbeats, parallel progress, vote progress,
+scores, tiebreaks, eliminations, claims, convergence and archive completion.
 
 ## Data and Security
 
 - `arena.db`: local SQLite registry and history index.
 - `runs/<run_id>/transcript.json`: complete structured transcript.
-- `runs/<run_id>/debate.md`: readable report.
+- `runs/<run_id>/review.md` or `debate.md`: readable report.
 
 API keys are stored as plaintext in the local database. The API never returns
 them. To use another database path:
@@ -206,18 +238,18 @@ them. To use another database path:
 ARENA_DB=/path/to/arena.db uv run python arena.py --serve
 ```
 
-`arena.db`, `arena.db-*`, and `runs/` are ignored by Git. Never commit real keys,
-private transcripts, or production databases.
+`arena.db`, `arena.db-*` and `runs/` are ignored by Git. Never commit real keys,
+private transcripts or production databases.
 
 This version is intentionally single-instance and local-first:
 
-- no login, users, or tenant isolation;
+- no login, users or tenant isolation;
 - no global concurrency governor;
-- no compatibility layer for old databases or transcripts;
+- no compatibility layer for legacy databases or transcripts;
 - the launcher binds to `127.0.0.1` only.
 
 For public deployment, add authentication, HTTPS, access control, process
-isolation, and resource limits at the reverse proxy or platform layer.
+isolation and resource limits at the reverse proxy or platform layer.
 
 ## Tests
 
@@ -228,16 +260,12 @@ node --check static/i18n.js
 git diff --check
 ```
 
-Tests use deterministic mocks, temporary SQLite files, and loopback HTTP
-servers. No real provider API key is required.
+Tests use deterministic mocks, temporary SQLite files and loopback HTTP servers.
+No real provider API key is required.
 
 ## Roadmap
 
 - User accounts and per-user model ownership.
 - Shared deployment controls and quotas.
-- Model comparison analytics across archived runs.
-- Optional research/tool workflows outside the core tournament engine.
-
----
-
-If you prefer Chinese, read [README.zh-CN.md](README.zh-CN.md).
+- Multi-judge review panels and human adoption decisions.
+- Optional research/tool workflows outside the core review and debate engines.

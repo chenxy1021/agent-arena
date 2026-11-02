@@ -33,8 +33,11 @@ class ModelNameRequest(BaseModel):
 
 class StartRun(BaseModel):
     proposition: str = Field(min_length=1, max_length=2000)
+    mode: Literal["review", "debate"] = "review"
     vote_mode: Literal["eliminate", "support"] = "eliminate"
-    model_ids: list[int] = Field(min_length=2, max_length=16)
+    model_ids: list[int] = Field(min_length=2, max_length=8)
+    judge_model_id: int | None = None
+    diversify: bool = True
     timeout: float = Field(default=240, ge=5, le=1200)
     speech_mode: Literal["parallel_buffered", "sequential_live"] = "parallel_buffered"
     background: str = Field(default="", max_length=4000)

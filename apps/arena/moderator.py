@@ -116,6 +116,7 @@ class ArenaResult:
     speech_mode: str = "parallel_buffered"
     converged: bool = False
     stop_reason: str = ""
+    mode: str = "debate"
     schema_version: int = 3
 
     def to_dict(self) -> dict[str, Any]:
@@ -447,6 +448,7 @@ class Arena:
         rounds: list[RoundRecord] = []
         max_rounds = cfg.max_rounds or max(len(active), 1)
         converged = False
+        convergence_hits = 0
 
         self.sink.emit(
             "run_start",
@@ -510,8 +512,22 @@ class Arena:
                 and record.stance_spread is not None
                 and record.stance_spread <= CONVERGENCE_SPREAD
             ):
-                converged = True
-                self.sink.emit("converged", round_no=rnd, spread=record.stance_spread)
+                convergence_hits += 1
+                if convergence_hits >= 2:
+                    converged = True
+                    self._stop_reason = f"因收敛提前收束（第 {rnd} 轮）"
+                    self.sink.emit(
+                        "converged",
+                        round_no=rnd,
+                        spread=record.stance_spread,
+                        closing=True,
+                    )
+                else:
+                    self.sink.emit(
+                        "converged_watch",
+                        round_no=rnd,
+                        spread=record.stance_spread,
+                    )
             if record.stance_spread is not None and record.stance_spread >= DIVERGENCE_SPREAD:
                 max_rounds += 1
 
@@ -526,6 +542,11 @@ class Arena:
             out, n_votes, tiebreak = self._resolve_vote(
                 voters, active, record, eliminated, rnd
             )
+            if converged:
+                record.tiebreak = "因收敛提前收束，按本轮评分与票数选出建议胜者"
+                rounds.append(record)
+                self._rounds_cache.append(record)
+                break
             record.eliminated = out.name if out else None
             record.votes_received = n_votes
             record.tiebreak = tiebreak
@@ -552,8 +573,41 @@ class Arena:
             rounds.append(record)
             self._rounds_cache.append(record)
 
-        winner = active[0].name if len(active) == 1 else None
-        final_text = self._final_statement(active[0], eliminated, rounds) if winner else ""
+        winner_agent = active[0] if len(active) == 1 else None
+        if winner_agent is None and converged and active:
+            scored_round = next((item for item in reversed(rounds) if item.scores), None)
+            if scored_round:
+                def convergence_key(agent: Any) -> tuple[float, float]:
+                    dims = scored_round.scores.get(agent.name, {})
+                    average = sum(dims.values()) / max(1, len(dims))
+                    votes = scored_round.counts.get(agent.name, 0)
+                    support = -votes if cfg.vote_mode == "eliminate" else votes
+                    return average, support
+
+                ranked = sorted(active, key=convergence_key, reverse=True)
+                if len(active) == 1 or convergence_key(ranked[0]) > convergence_key(ranked[1]):
+                    winner_agent = ranked[0]
+        winner = winner_agent.name if winner_agent else None
+        final_text = (
+            self._final_statement(winner_agent, eliminated, rounds)
+            if winner_agent else ""
+        )
+        if winner_agent is None and len(active) > 1 and rounds and not self._stopped:
+            undecided_reason = (
+                rounds[-1].tiebreak
+                or "评分、票数与新增主张数完全相同，结果未决"
+            )
+            self._stop_reason = undecided_reason
+            self.sink.emit(
+                "undecided",
+                agents=[agent.name for agent in active],
+                reason=undecided_reason,
+            )
+            final_text = "\n\n".join(
+                f"【{agent.name}｜并列结论】\n"
+                f"{self._final_statement(agent, eliminated, rounds)}"
+                for agent in active
+            )
         if winner:
             self.sink.emit("winner", agent=winner)
             if final_text:
@@ -579,6 +633,7 @@ class Arena:
             final_answer=final_text,
             claims=self._claims,
             setup={
+                "mode": "debate",
                 "model_ids": [
                     int(getattr(agent, "config_id", 0) or 0)
                     for agent in self.agents
@@ -828,10 +883,8 @@ class Arena:
         return max(values) - min(values)
 
     def _judge_weight_for(self, alive_count: int) -> float:
-        """只剩 2 人时，评审票总权重不得超过存活者。"""
-        if alive_count <= 2:
-            return 0.0
-        return self.cfg.judge_weight
+        """评审票固定半权；决赛也保留评审票，避免 2 人互投必然平票。"""
+        return self.cfg.judge_weight if alive_count >= 2 else 0.0
 
     def _collect_votes(
         self,
@@ -853,6 +906,8 @@ class Arena:
         def task(agent: Any) -> Vote:
             is_judge = agent.name in judge_names
             weight = judge_weight if is_judge else 1.0
+            if weight <= 0:
+                return Vote(rnd, agent.name, None, "", "有效权重为 0，未调用", is_judge, stage, 0)
             self.sink.emit(
                 "voting",
                 round_no=rnd,
@@ -935,6 +990,7 @@ class Arena:
                         error=str(exc),
                     )
                     votes.append(Vote(rnd, agent.name, None, "", str(exc), stage=stage))
+        votes = [vote for vote in votes if vote.weight > 0]
         votes.sort(key=lambda v: (not v.is_judge, v.voter))
         return votes
 
@@ -949,10 +1005,11 @@ class Arena:
     def _weight_breakdown(self, votes: Sequence[Vote]) -> dict[str, Any]:
         alive = [v for v in votes if not v.is_judge and v.target]
         judges = [v for v in votes if v.is_judge and v.target]
+        judge_weights = [float(v.weight) for v in judges if v.weight > 0]
         return {
             "alive_votes": len(alive),
             "judge_votes": len(judges),
-            "judge_weight": self.cfg.judge_weight,
+            "judge_weight": round(judge_weights[0], 3) if judge_weights else 0.0,
             "alive_weight_total": round(sum(v.weight for v in alive), 3),
             "judge_weight_total": round(sum(v.weight for v in judges), 3),
         }
@@ -1145,7 +1202,7 @@ class Arena:
             )
             if out is not None:
                 return out, n_votes, reason
-            return None, 0.0, f"{len(tied_names)} 人加赛后仍未分出胜负"
+            return None, 0.0, f"{len(tied_names)} 人加赛后仍未分出胜负，结果未决"
 
     def _emit_scores(self, scores: dict[str, dict[str, float]], rnd: int) -> None:
         if not scores:
@@ -1174,16 +1231,17 @@ class Arena:
     ) -> tuple[Any | None, float, str | None]:
         """返回 (出局者, 其票数, 平票说明)。allow_tiebreak=False 时走三级确定性裁决。"""
         by_name = {a.name: a for a in active}
-        lengths = {s.agent: len(extract_view(s.text)) for s in speeches}
 
         if not counts:
-            target = min(active, key=lambda a: (lengths.get(a.name, 0), a.name))
-            return target, 0.0, "无人有效投票，按信息量最少裁决"
+            return self._decide_tiebreak(
+                [a.name for a in active], 0.0, {a.name: a for a in active}, record, speeches
+            )
 
         tied, edge = self._edge_names(counts, active)
         if self.cfg.vote_mode == "eliminate" and edge == 0:
-            target = min(active, key=lambda a: (lengths.get(a.name, 0), a.name))
-            return target, 0.0, "无人有效投票，按信息量最少裁决"
+            return self._decide_tiebreak(
+                [a.name for a in active], 0.0, {a.name: a for a in active}, record, speeches
+            )
 
         if len(tied) == 1:
             return by_name.get(tied[0]), edge, None
@@ -1209,7 +1267,7 @@ class Arena:
             return sum(dims.values()) / len(dims) if dims else 0.0
 
         # 低分者出局（评分高者留）。
-        ranked = sorted(tied, key=lambda name: (avg(name), name))
+        ranked = sorted(tied, key=avg)
         if avg(ranked[0]) < avg(ranked[-1]):
             return by_name.get(ranked[0]), edge, f"{len(tied)} 人平票，按多维评分差裁决"
 
@@ -1219,7 +1277,7 @@ class Arena:
             for vote in record.votes:
                 if vote.target and not vote.is_judge:
                     alive_votes[vote.target] = alive_votes.get(vote.target, 0) + 1
-        vote_ranked = sorted(tied, key=lambda name: (alive_votes.get(name, 0), name))
+        vote_ranked = sorted(tied, key=lambda name: alive_votes.get(name, 0))
         if alive_votes.get(vote_ranked[0], 0) < alive_votes.get(vote_ranked[-1], 0):
             return by_name.get(vote_ranked[0]), edge, f"{len(tied)} 人平票，存活者票优先裁决"
 
@@ -1227,14 +1285,11 @@ class Arena:
         claim_counts = {
             name: (self._claim_count_for(name, record) if record else 0) for name in tied
         }
-        claim_ranked = sorted(tied, key=lambda name: (claim_counts.get(name, 0), name))
+        claim_ranked = sorted(tied, key=lambda name: claim_counts.get(name, 0))
         if claim_counts.get(claim_ranked[0], 0) < claim_counts.get(claim_ranked[-1], 0):
             return by_name.get(claim_ranked[0]), edge, f"{len(tied)} 人平票，按本轮新增主张数裁决"
 
-        # 兜底：按姓名排序，保证结果可复现。
-        lengths = {s.agent: len(extract_view(s.text)) for s in speeches}
-        target = min(tied, key=lambda name: (lengths.get(name, 0), name))
-        return by_name.get(target), edge, f"{len(tied)} 人平票，按确定性顺序裁决"
+        return None, edge, f"{len(tied)} 人评分、票数与新增主张数完全相同，结果未决"
 
     def _final_statement(
         self,

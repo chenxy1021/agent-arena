@@ -13,13 +13,15 @@ from . import database
 from .events import RecordingSink
 from .moderator import Arena, ArenaConfig
 from .providers import ApiModelAgent
+from .review import ReviewArena, ReviewConfig
 from .schemas import StartRun
 
 
 class RunState:
-    def __init__(self, run_id: str, proposition: str):
+    def __init__(self, run_id: str, proposition: str, mode: str = "debate"):
         self.id = run_id
         self.proposition = proposition
+        self.mode = mode
         self.status = "running"
         self.error: str | None = None
         self.result: dict[str, Any] | None = None
@@ -32,6 +34,7 @@ class RunState:
         return {
             "id": self.id,
             "proposition": self.proposition,
+            "mode": self.mode,
             "status": self.status,
             "error": self.error,
             "events": self.sink.count(),
@@ -67,6 +70,7 @@ class Manager:
             raise ValueError("命题不能为空")
 
         agents: list[ApiModelAgent] = []
+        configs: dict[int, dict[str, Any]] = {}
         seen: set[int] = set()
         for model_id in payload.model_ids:
             if model_id in seen:
@@ -75,6 +79,7 @@ class Manager:
             config = database.get_model(model_id)
             if not config:
                 raise ValueError(f"模型配置 #{model_id} 不存在")
+            configs[model_id] = config
             agents.append(
                 ApiModelAgent(
                     config_id=model_id,
@@ -90,13 +95,35 @@ class Manager:
         if len(agents) < 2:
             raise ValueError("至少需要选择 2 个参赛大模型")
 
+        judge: ApiModelAgent | None = None
+        if payload.mode == "review":
+            judge_id = int(payload.judge_model_id or 0)
+            if not judge_id:
+                raise ValueError("方案评审需要选择独立裁判模型")
+            if judge_id in seen:
+                raise ValueError("裁判不能同时参赛")
+            judge_config = configs.get(judge_id) or database.get_model(judge_id)
+            if not judge_config:
+                raise ValueError("裁判模型配置不存在")
+            judge = ApiModelAgent(
+                config_id=judge_id,
+                name=str(judge_config["name"]),
+                base_url=str(judge_config["base_url"]),
+                api_key=str(judge_config["api_key"]),
+                model=str(judge_config["model"]),
+                system_prompt=str(judge_config.get("system_prompt") or ""),
+                temperature=judge_config.get("temperature"),
+                persona="",
+            )
+
         run_id = uuid.uuid4().hex[:12]
-        run = RunState(run_id, proposition)
-        arena_holder: dict[str, Arena] = {}
+        run = RunState(run_id, proposition, payload.mode)
+        arena_holder: dict[str, Arena | ReviewArena] = {}
         started_at = time.strftime("%Y-%m-%d %H:%M:%S")
         database.create_run(
             run_id=run_id,
             proposition=proposition,
+            mode=payload.mode,
             vote_mode=payload.vote_mode,
             participants=len(agents),
             started_at=started_at,
@@ -113,10 +140,24 @@ class Manager:
             background=payload.background,
             constraints=list(payload.constraints or []),
         )
+        review_cfg = ReviewConfig(
+            proposition=proposition,
+            timeout=payload.timeout,
+            out_dir=settings.RUNS_DIR,
+            criteria=list(payload.criteria or []),
+            background=payload.background,
+            constraints=list(payload.constraints or []),
+            diversify=payload.diversify,
+            run_id=run_id,
+        )
 
         def worker() -> None:
             try:
-                arena = Arena(agents, cfg, sink=run.sink)
+                arena = (
+                    ReviewArena(agents, judge, review_cfg, sink=run.sink)
+                    if payload.mode == "review" and judge
+                    else Arena(agents, cfg, sink=run.sink)
+                )
                 arena_holder["arena"] = arena
                 arena.cancel_hook = run.cancel_event
                 run.run_dir = str(arena.run_dir)

@@ -16,6 +16,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     proposition TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'debate',
     vote_mode TEXT NOT NULL DEFAULT 'eliminate',
     status TEXT NOT NULL,
     winner TEXT,
@@ -56,6 +57,11 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "mode" not in columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'debate'")
 
 
 def create_model(
@@ -155,6 +161,7 @@ def create_run(
     *,
     run_id: str,
     proposition: str,
+    mode: str = "debate",
     vote_mode: str,
     participants: int,
     started_at: str,
@@ -166,10 +173,10 @@ def create_run(
         conn.execute(
             """
             INSERT INTO runs
-                (id, proposition, vote_mode, status, participants, started_at, run_dir, created_ts)
-            VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
+                (id, proposition, mode, vote_mode, status, participants, started_at, run_dir, created_ts)
+            VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)
             """,
-            (run_id, proposition, vote_mode, participants, started_at, run_dir, time.time()),
+            (run_id, proposition, mode, vote_mode, participants, started_at, run_dir, time.time()),
         )
 
 
@@ -205,7 +212,7 @@ def list_runs(limit: int = 50, db_path: Path | None = None) -> list[dict[str, An
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT id, proposition, vote_mode, status, winner, error,
+            SELECT id, proposition, mode, vote_mode, status, winner, error,
                    participants, duration, started_at, finished_at, run_dir, created_ts
             FROM runs
             ORDER BY created_ts DESC

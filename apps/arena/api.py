@@ -187,6 +187,7 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         transcript = _read_transcript(run)
         if not transcript:
             continue
+        run["mode"] = str(transcript.get("mode") or run.get("mode") or "debate")
         roles = transcript.get("participants") or []
         run["participant_names"] = [
             str(item.get("name"))
@@ -201,6 +202,9 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         run["round_count"] = len(transcript.get("rounds") or [])
         run["stop_reason"] = str(transcript.get("stop_reason") or "")
         run["converged"] = bool(transcript.get("converged"))
+        run["recommended_agent"] = str(transcript.get("recommended_agent") or "")
+        run["judge_name"] = str((transcript.get("judge") or {}).get("name") or "")
+        run["answer_count"] = len(transcript.get("answers") or [])
         run["reusable"] = len(
             (transcript.get("setup") or {}).get("model_ids", [])
         ) >= 2
@@ -243,6 +247,9 @@ def build_run_preset(
     if len(model_ids) < 2:
         raise ValueError("战报缺少至少两个模型配置 ID")
 
+    mode = str(setup.get("mode") or transcript.get("mode") or "debate")
+    judge_model_id = int(setup.get("judge_model_id") or 0)
+
     missing_models: list[dict[str, str]] = []
     for config_id in model_ids:
         if config_id in by_id:
@@ -252,9 +259,20 @@ def build_run_preset(
             "name": str(participant.get("name") or f"配置 #{config_id}"),
             "model": str(participant.get("model") or participant.get("label") or ""),
         })
+    missing_judge: dict[str, str] | None = None
+    if mode == "review":
+        if not judge_model_id:
+            missing_judge = {"name": "裁判模型", "model": ""}
+        elif judge_model_id not in by_id:
+            judge = transcript.get("judge") or {}
+            missing_judge = {
+                "name": str(judge.get("name") or f"配置 #{judge_model_id}"),
+                "model": str(judge.get("model") or judge.get("label") or ""),
+            }
 
     return {
         "proposition": str(transcript.get("proposition") or ""),
+        "mode": mode,
         "vote_mode": str(setup.get("vote_mode") or "eliminate"),
         "speech_mode": str(setup.get("speech_mode") or "parallel_buffered"),
         "timeout": float(setup.get("timeout") or 240),
@@ -262,8 +280,11 @@ def build_run_preset(
         "constraints": list(setup.get("constraints") or []),
         "criteria": list(setup.get("criteria") or []),
         "model_ids": model_ids,
+        "judge_model_id": judge_model_id or None,
+        "diversify": bool(setup.get("diversify", True)),
         "missing_models": missing_models,
-        "resolved": len(model_ids) >= 2 and not missing_models,
+        "missing_judge": missing_judge,
+        "resolved": len(model_ids) >= 2 and not missing_models and not missing_judge,
     }
 
 
@@ -273,6 +294,8 @@ def history_run(run_id: str) -> dict[str, Any]:
     if not meta:
         raise HTTPException(status_code=404, detail="history not found")
     transcript = _read_transcript(meta)
+    if transcript and not transcript.get("mode"):
+        transcript["mode"] = meta.get("mode") or "debate"
     return {"meta": meta, "transcript": transcript}
 
 

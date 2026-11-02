@@ -59,22 +59,35 @@ const DEMO_SCORES = {
 const DEMO_HISTORY = [
   {
     id: 'demo-1', proposition: '远程办公是否应该永久化', status: 'done',
+    mode: 'debate',
     winner: 'GPT-5', participants: 4, round_count: 3, duration: 252,
     started_at: '2026-11-01 21:42:00',
     participant_names: ['GPT-5', 'Claude', 'Gemini', 'DeepSeek'],
   },
   {
     id: 'demo-2', proposition: '是否应该开源内部工具', status: 'done',
+    mode: 'review', recommended_agent: 'Claude', answer_count: 3,
     winner: 'Claude', participants: 3, round_count: 2, duration: 168,
     started_at: '2026-11-01 20:15:00',
     participant_names: ['Claude', 'GPT-5', 'Gemini'],
   },
   {
     id: 'demo-3', proposition: '用 Rust 重写核心服务', status: 'error',
+    mode: 'debate',
     winner: null, participants: 2, round_count: 1, duration: 63,
     started_at: '2026-11-01 16:42:00',
     participant_names: ['Gemini', 'GPT-5'],
   },
+];
+
+const REVIEW_DIMENSIONS = ['可行性', '正确性', '完备性', '差异度'];
+const REVIEW_FIELDS = [
+  ['name', '方案名'],
+  ['claim', '核心主张'],
+  ['steps', '做法步骤'],
+  ['cost', '代价'],
+  ['risk', '风险'],
+  ['diff', '与主流做法的差异'],
 ];
 
 const RollingNumber = {
@@ -540,7 +553,18 @@ Vue.createApp({
       ],
       proposition: '',
       currentPage: 'register',
+      runMode: 'review',
       mode: 'eliminate',
+      reviewJudgeId: '',
+      diversify: true,
+      reviewPhase: '',
+      reviewJudge: null,
+      reviewRows: [],
+      reviewJudgeResult: null,
+      reviewSynthesis: '',
+      reviewSynthesisSections: null,
+      reviewAbsent: [],
+      reviewAnomalies: [],
       timeout: 240,
       speechMode: 'parallel_buffered',
       background: '',
@@ -582,6 +606,7 @@ Vue.createApp({
       history: [],
       historyLoading: true,
       archiveSearch: '',
+      archiveScope: 'all',
       viewingHistoryId: '',
       canReuseCurrentRun: false,
       participants: [],
@@ -655,6 +680,125 @@ Vue.createApp({
   computed: {
     selectedModelIds() {
       return this.models.filter((m) => m.checked).map((m) => m.id);
+    },
+
+    judgeCandidates() {
+      const selected = new Set(this.selectedModelIds);
+      return this.models.filter((model) => !selected.has(model.id));
+    },
+
+    canStart() {
+      if (this.selectedModelIds.length < 2) return false;
+      return this.runMode !== 'review' || Boolean(this.reviewJudgeId);
+    },
+
+    debateCost() {
+      const count = Math.max(2, this.selectedModelIds.length);
+      const calls = Math.max(8, count * count * 2 + count);
+      return `约 ${calls} 次调用 · 预计 5–12 分钟`;
+    },
+
+    reviewDimensions() {
+      return REVIEW_DIMENSIONS;
+    },
+
+    reviewPhaseLabel() {
+      return {
+        answers: '参赛模型独立提交方案',
+        judging: '独立裁判匿名评审',
+        synthesis: '生成推荐与整合建议',
+        done: '评审完成',
+      }[this.reviewPhase] || '等待评审';
+    },
+
+    reviewPhaseDescription() {
+      if (this.reviewPhase === 'answers') {
+        return '参赛模型之间互不可见，六段式方案完成后统一进入匿名评审。';
+      }
+      if (this.reviewPhase === 'judging') {
+        return '方案已乱序并替换为匿名标签，裁判按四个维度评分。';
+      }
+      if (this.reviewPhase === 'synthesis') {
+        return '评分已完成，正在整理推荐理由、其他方案优点和执行步骤。';
+      }
+      if (this.reviewPhase === 'done') {
+        return '推荐仅在本场评分口径内成立，请结合方案全文做最终判断。';
+      }
+      return '选择参赛方案与独立裁判后，评审舱会并行收集方案。';
+    },
+
+    reviewSteps() {
+      const rank = { '': 0, answers: 1, judging: 2, synthesis: 3, done: 4 };
+      const current = rank[this.reviewPhase] || 0;
+      return [
+        { key: 'answers', index: '01', label: '独立作答', detail: `${this.reviewRows.filter((row) => row.text || row.error).length}/${this.reviewRows.length || 0} 完成` },
+        { key: 'judging', index: '02', label: '匿名评审', detail: this.reviewJudgeResult ? '评分已返回' : '四维评分' },
+        { key: 'synthesis', index: '03', label: '推荐整合', detail: this.reviewSynthesis ? '已生成' : '执行建议' },
+      ].map((step, index) => ({
+        ...step,
+        className: {
+          done: current > index + 1,
+          active: current === index + 1,
+          pending: current < index + 1,
+        },
+      }));
+    },
+
+    reviewRecommendedAgent() {
+      return this.reviewJudgeResult?.recommended_agent
+        || this.reviewRows.find((row) => row.label === this.reviewJudgeResult?.recommended)?.agent
+        || '';
+    },
+
+    reviewRecommendedTotal() {
+      const label = this.reviewJudgeResult?.recommended;
+      return label ? (this.reviewJudgeResult?.totals?.[label] ?? '—') : '—';
+    },
+
+    reviewJudgeStatus() {
+      if (this.reviewPhase === 'judging') return '裁判正在阅读匿名方案并评分。';
+      if (this.reviewPhase === 'synthesis') return '评分完成，正在生成整合建议。';
+      if (this.reviewPhase === 'done') return '评审完成。';
+      return '等待全部方案提交后开始匿名评审。';
+    },
+
+    reviewScoreRows() {
+      const result = this.reviewJudgeResult;
+      if (!result) return [];
+      const labels = result.ranking?.length ? result.ranking : Object.keys(result.scores || {});
+      return labels.map((label) => {
+        const row = this.reviewRows.find((item) => item.label === label);
+        return {
+          label,
+          agent: row?.agent || label,
+          perspective: row?.perspective || '',
+          dims: result.scores?.[label] || {},
+          total: result.totals?.[label] ?? '—',
+        };
+      });
+    },
+
+    reviewRejections() {
+      const result = this.reviewJudgeResult;
+      if (!result) return [];
+      return Object.entries(result.rejections || {}).map(([label, text]) => ({
+        label,
+        agent: this.reviewRows.find((row) => row.label === label)?.agent || label,
+        text: String(text || ''),
+      }));
+    },
+
+    reviewSynthesisList() {
+      const labels = {
+        recommendation: '推荐结论',
+        reasons: '关键理由',
+        absorb: '必须吸收',
+        plan: '整合方案',
+        conditions: '前提与失效条件',
+      };
+      return Object.entries(labels)
+        .filter(([key]) => this.reviewSynthesisSections?.[key]?.length)
+        .map(([key, label]) => ({ key, label, lines: this.reviewSynthesisSections[key] }));
     },
 
     aliveCount() {
@@ -1173,20 +1317,27 @@ Vue.createApp({
     },
 
     filteredHistory() {
+      const scoped = this.archiveScope === 'all'
+        ? this.history
+        : this.history.filter((item) => (item.mode || 'debate') === this.archiveScope);
       const query = this.archiveSearch.trim().toLowerCase();
-      if (!query) return this.history;
-      return this.history.filter((item) => [
+      if (!query) return scoped;
+      return scoped.filter((item) => [
         item.proposition,
         item.winner,
+        item.recommended_agent,
         ...(item.participant_names || []),
       ].some((value) => String(value || '').toLowerCase().includes(query)));
     },
 
     archiveStats() {
-      const completed = this.history.filter((item) => item.status === 'done').length;
-      const models = new Set(this.history.flatMap((item) => item.participant_names || []));
+      const scoped = this.archiveScope === 'all'
+        ? this.history
+        : this.history.filter((item) => (item.mode || 'debate') === this.archiveScope);
+      const completed = scoped.filter((item) => item.status === 'done').length;
+      const models = new Set(scoped.flatMap((item) => item.participant_names || []));
       return {
-        total: this.history.length,
+        total: scoped.length,
         completed,
         models: models.size,
       };
@@ -1195,7 +1346,10 @@ Vue.createApp({
     // 档案页：模型画像（用历史战报里的分数与胜率聚合）
     modelProfiles() {
       const byName = new Map();
-      for (const item of this.history) {
+      const scoped = this.archiveScope === 'all'
+        ? []
+        : this.history.filter((item) => (item.mode || 'debate') === this.archiveScope);
+      for (const item of scoped) {
         const names = item.participant_names || [];
         for (const name of names) {
           if (!byName.has(name)) {
@@ -1203,7 +1357,7 @@ Vue.createApp({
           }
           const profile = byName.get(name);
           profile.runs += 1;
-          if (item.winner === name) profile.wins += 1;
+          if ((item.winner || item.recommended_agent) === name) profile.wins += 1;
         }
       }
       return [...byName.values()]
@@ -1428,6 +1582,13 @@ Vue.createApp({
     toggleArchiveCompare(id) {
       if (this.compareIds.includes(id)) {
         this.compareIds = this.compareIds.filter((item) => item !== id);
+        return;
+      }
+      const candidate = this.history.find((item) => item.id === id);
+      const first = this.history.find((item) => item.id === this.compareIds[0]);
+      if (candidate && first && (candidate.mode || 'debate') !== (first.mode || 'debate')) {
+        this.hint = '两种模式的评分口径不同，不能跨模式对比';
+        this.hintError = true;
         return;
       }
       if (this.compareIds.length >= 3) {
@@ -1762,6 +1923,60 @@ Vue.createApp({
       return this.decodedNames[name] || name;
     },
 
+    modeLabel(mode) {
+      return mode === 'review' ? '方案评审' : '淘汰辩论';
+    },
+
+    reviewAnswerFor(agent) {
+      return this.reviewRows.find((row) => row.agent === agent) || null;
+    },
+
+    reviewPlanFields(row) {
+      return REVIEW_FIELDS.map(([key, label]) => ({
+        key,
+        label,
+        value: row.plan?.[key] || '',
+      }));
+    },
+
+    upsertReviewRow(name, patch = {}) {
+      const index = this.reviewRows.findIndex((row) => row.agent === name);
+      const current = index >= 0
+        ? this.reviewRows[index]
+        : {
+            agent: name,
+            label: '',
+            model: this.participants.find((item) => item.name === name)?.label || '',
+            perspective: '',
+            text: '',
+            plan: {},
+            elapsed: 0,
+            chars: 0,
+            progress: 4,
+            state: 'idle',
+            statusLabel: '等待',
+            waitingLabel: '等待提交方案',
+            missing: [],
+            error: '',
+          };
+      const next = { ...current, ...patch };
+      if (next.error) {
+        next.state = 'error';
+        next.statusLabel = '缺席';
+      } else if (next.text) {
+        next.state = 'done';
+        next.statusLabel = '已提交';
+        next.waitingLabel = '方案已提交';
+        next.progress = 100;
+      } else if (next.state !== 'idle') {
+        next.state = 'working';
+        next.statusLabel = '作答中';
+      }
+      if (index >= 0) this.reviewRows.splice(index, 1, next);
+      else this.reviewRows.push(next);
+      this.reviewRows = [...this.reviewRows];
+    },
+
     agentModel(name) {
       return this.participants.find((item) => item.name === name)?.label || '';
     },
@@ -1901,6 +2116,16 @@ Vue.createApp({
 
     toggleModel(model, event) {
       if (event.target.tagName !== 'INPUT') model.checked = !model.checked;
+      if (model.checked && this.selectedModelIds.length >= 8) {
+        model.checked = false;
+        this.hint = '方案评审最多选择 8 个参赛模型';
+        this.hintError = true;
+      }
+      if (model.checked && Number(this.reviewJudgeId) === Number(model.id)) {
+        this.reviewJudgeId = '';
+        this.hint = '裁判不能同时参赛，请重新选择裁判';
+        this.hintError = true;
+      }
     },
 
     async loadModels() {
@@ -1910,10 +2135,21 @@ Vue.createApp({
         const data = await res.json();
         if (!res.ok) throw new Error(cleanError(data));
         const selected = new Map(this.models.map((item) => [item.id, item.checked]));
-        this.models = (data.models || []).map((item) => ({
+        const hasSelection = this.models.length > 0;
+        const rows = (data.models || []).map((item) => ({
           ...item,
-          checked: selected.has(item.id) ? selected.get(item.id) : true,
+          checked: selected.has(item.id) ? selected.get(item.id) : false,
         }));
+        if (!hasSelection) {
+          const participantLimit = Math.min(3, Math.max(2, rows.length - 1));
+          rows.forEach((item, index) => { item.checked = index < participantLimit; });
+          if (this.runMode === 'review' && rows.length >= 3) {
+            this.reviewJudgeId = rows[participantLimit]?.id || '';
+          }
+        } else if (this.reviewJudgeId && selected.get(Number(this.reviewJudgeId))) {
+          this.reviewJudgeId = '';
+        }
+        this.models = rows;
       } catch (err) {
         this.models = [];
         this.hint = `模型列表读取失败：${err.message}`;
@@ -2067,6 +2303,14 @@ Vue.createApp({
       this.stopDemo();
       this.participants = [];
       this.rounds = [];
+      this.reviewPhase = '';
+      this.reviewJudge = null;
+      this.reviewRows = [];
+      this.reviewJudgeResult = null;
+      this.reviewSynthesis = '';
+      this.reviewSynthesisSections = null;
+      this.reviewAbsent = [];
+      this.reviewAnomalies = [];
       this.currentRound = 0;
       this.final = null;
       this.winnerName = '';
@@ -2156,6 +2400,16 @@ Vue.createApp({
         this.hintError = true;
         return;
       }
+      if (this.selectedModelIds.length > 8) {
+        this.hint = '方案评审最多选择 8 个参赛模型';
+        this.hintError = true;
+        return;
+      }
+      if (this.runMode === 'review' && !this.reviewJudgeId) {
+        this.hint = '方案评审需要选择一个不参赛的独立裁判';
+        this.hintError = true;
+        return;
+      }
       this.hint = '';
       this.hintError = false;
       this.resetArena();
@@ -2169,7 +2423,10 @@ Vue.createApp({
 
       const payload = {
         proposition,
+        mode: this.runMode,
         vote_mode: this.mode,
+        judge_model_id: this.runMode === 'review' ? Number(this.reviewJudgeId) : null,
+        diversify: Boolean(this.diversify),
         timeout: Number(this.timeout) || 240,
         model_ids: this.selectedModelIds,
         speech_mode: this.speechMode,
@@ -2247,8 +2504,149 @@ Vue.createApp({
       this.criteria = this.criteria.filter((_, i) => i !== index);
     },
 
+    startReviewDemo() {
+      this.resetArena();
+      this.runMode = 'review';
+      this.proposition = this.proposition.trim() || '是否应该先做小范围验证再扩张';
+      this.goPage('venue');
+      this.running = true;
+      this.status = 'running';
+      this.startTimer();
+      this.demoTimers = [];
+      const push = (event, delay) => {
+        this.demoTimers.push(window.setTimeout(() => this.handleEvent(event), delay));
+      };
+      const participants = DEMO_MODELS.slice(0, 3);
+      const judge = DEMO_MODELS[3];
+      const plans = [
+        {
+          name: '两周闭环验证',
+          claim: '先用最小样本验证价值假设，再逐步放量。',
+          steps: '访谈 5 个目标用户\n搭建可关闭试点\n两周后复盘留存与成本',
+          cost: '两周人力与少量投放成本',
+          risk: '样本偏差可能让验证结果过度乐观',
+          diff: '不同于一次性铺开，本方案先设止损线。',
+        },
+        {
+          name: '渠道共创',
+          claim: '先绑定一个高密度渠道，用真实订单验证模型。',
+          steps: '锁定单一渠道\n联合设计服务包\n按周核对转化和毛利',
+          cost: '渠道让利与定制交付',
+          risk: '渠道依赖会压缩后续议价空间',
+          diff: '不追求全渠道覆盖，而是先做深一个入口。',
+        },
+        {
+          name: '风险控制先行',
+          claim: '先定义失效条件，再决定是否投入。',
+          steps: '列出三类关键风险\n建立人工复核机制\n达到阈值立即停止',
+          cost: '流程设计与复核开销',
+          risk: '过度谨慎可能错过窗口期',
+          diff: '把风险预算放在增长预算之前。',
+        },
+      ];
+
+      push({
+        kind: 'run_start',
+        mode: 'review',
+        proposition: this.proposition,
+        agents: participants.map((model, index) => ({
+          name: model.name,
+          label: model.model,
+          perspective: ['成本优先', '增长优先', '风险控制'][index],
+        })),
+        judge: { name: judge.name, label: judge.model },
+        stage: 'answers',
+      }, 100);
+      let at = 450;
+      participants.forEach((model, index) => {
+        push({
+          kind: 'review_answer_start',
+          agent: model.name,
+          perspective: ['成本优先', '增长优先', '风险控制'][index],
+        }, at);
+        push({
+          kind: 'review_answer_progress',
+          agent: model.name,
+          text: `【方案名】${plans[index].name}\n【核心主张】${plans[index].claim}`,
+        }, at + 220);
+        push({
+          kind: 'review_answer_done',
+          agent: model.name,
+          perspective: ['成本优先', '增长优先', '风险控制'][index],
+          plan: plans[index],
+          text: REVIEW_FIELDS.map(([key, label]) => `【${label}】${plans[index][key]}`).join('\n'),
+          elapsed: 12 + index * 4,
+          missing: [],
+          error: '',
+        }, at + 520);
+        at += 180;
+      });
+      // Labels must arrive after the last answer_done event, otherwise the demo
+      // would clear that row's label when the delayed answer finishes.
+      at = Math.max(at, 1450);
+      const labels = ['方案1', '方案2', '方案3'];
+      push({
+        kind: 'review_labels',
+        labels: participants.map((model, index) => ({
+          label: labels[index],
+          agent: model.name,
+          perspective: ['成本优先', '增长优先', '风险控制'][index],
+        })),
+      }, at);
+      push({ kind: 'review_phase', phase: 'judging', label: '匿名评审' }, at + 100);
+      push({ kind: 'review_judge_start', retried: false }, at + 160);
+      push({
+        kind: 'review_judge_done',
+        scores: {
+          方案1: { 可行性: 9, 正确性: 8, 完备性: 8.5, 差异度: 9 },
+          方案2: { 可行性: 7.5, 正确性: 8, 完备性: 7.5, 差异度: 8 },
+          方案3: { 可行性: 8, 正确性: 8.5, 完备性: 8, 差异度: 7.5 },
+        },
+        totals: { 方案1: 8.6, 方案2: 7.8, 方案3: 8.0 },
+        ranking: ['方案1', '方案3', '方案2'],
+        recommended: '方案1',
+        recommended_agent: participants[0].name,
+        reasons: { 方案1: '验证路径最短，且有明确的止损条件。' },
+        risks: { 方案1: '样本偏差可能影响结论。' },
+        rejections: {
+          方案3: '风险控制完整但缺少增长入口，无法验证需求强度。',
+          方案2: '渠道依赖过强，短期结果难以复制到其他场景。',
+        },
+        anomalies: [],
+      }, at + 1100);
+      push({ kind: 'review_phase', phase: 'synthesis', label: '整合建议' }, at + 1300);
+      push({
+        kind: 'review_synthesis_done',
+        text: '【推荐结论】推荐两周闭环验证。\n【关键理由】验证路径最短，止损条件明确。\n【必须吸收】借鉴风险控制方案的人工复核阈值。\n【整合方案】锁定单一渠道；运行两周试点；按周复盘；触发止损即停止。\n【前提与失效条件】目标用户样本不足或渠道拒绝试点时，本建议失效。',
+        sections: {
+          recommendation: ['推荐两周闭环验证。'],
+          reasons: ['验证路径最短，止损条件明确。'],
+          absorb: ['借鉴风险控制方案的人工复核阈值。'],
+          plan: ['锁定单一渠道', '运行两周试点', '按周复盘', '触发止损即停止'],
+          conditions: ['目标用户样本不足或渠道拒绝试点时，本建议失效。'],
+        },
+        error: '',
+      }, at + 1700);
+      push({
+        kind: 'budget',
+        calls: 5,
+        tokens_estimate: 8420,
+        wall_clock: 96,
+        per_model: {},
+      }, at + 1800);
+      push({
+        kind: 'done',
+        duration: 96,
+        winner: participants[0].name,
+      }, at + 1900);
+    },
+
     // 演示模式：把假的 SSE 事件喂给真正的 handleEvent，用来验证页面与动效。
     async startDemo() {
+      if (this.runMode === 'review') {
+        this.startReviewDemo();
+        return;
+      }
       this.resetArena();
       this.proposition = this.proposition.trim() || '远程办公是否应该永久化';
       this.goPage('venue');
@@ -2588,6 +2986,7 @@ Vue.createApp({
     handleEvent(ev) {
       switch (ev.kind) {
         case 'run_start':
+          this.runMode = ev.mode === 'review' ? 'review' : 'debate';
           this.modelOutputs = {};
           this.parallelRows = [];
           this.parallelRound = 0;
@@ -2599,15 +2998,147 @@ Vue.createApp({
             name: a.name,
             label: a.label,
             persona: a.persona || '',
+            perspective: a.perspective || '',
             state: 'alive',
             lastRole: '',
             lastElapsed: 0,
           }));
-          this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
-          this.beginStage('', '参赛阵容已就绪');
-          this.introHint = `第 1 轮 · ${this.participants.length} 位参赛`;
+          this.reviewJudge = ev.judge || null;
+          this.reviewRows = (ev.agents || []).map((a) => ({
+            agent: a.name,
+            label: '',
+            model: a.label || '',
+            perspective: a.perspective || '',
+            text: '',
+            plan: {},
+            elapsed: 0,
+            chars: 0,
+            progress: 4,
+            state: 'idle',
+            statusLabel: '等待',
+            waitingLabel: '等待提交方案',
+            missing: [],
+            error: '',
+          }));
+          if (this.runMode === 'review') {
+            this.reviewPhase = ev.stage || 'answers';
+            this.liveLabel = `${this.participants.length} 份方案正在独立生成`;
+            this.beginStage('', '参赛模型并行作答');
+            this.introHint = '方案评审 · 独立作答';
+          } else {
+            this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
+            this.beginStage('', '参赛阵容已就绪');
+            this.introHint = `第 1 轮 · ${this.participants.length} 位参赛`;
+          }
           this.playFx('intro', 2400);
           this.$nextTick(this.setupStage);
+          break;
+
+        case 'review_phase':
+          this.reviewPhase = ev.phase || this.reviewPhase;
+          this.liveLabel = ev.label || this.reviewPhaseLabel;
+          this.beginStage('', this.reviewPhaseDescription);
+          break;
+
+        case 'review_answer_start':
+          this.upsertReviewRow(ev.agent, {
+            perspective: ev.perspective || '',
+            state: 'working',
+            waitingLabel: '正在理解命题并组织方案',
+          });
+          this.setAgentState(ev.agent, 'thinking');
+          this.liveLabel = `${ev.agent} 正在提交方案`;
+          break;
+
+        case 'review_answer_progress': {
+          const row = this.reviewRows.find((item) => item.agent === ev.agent);
+          this.upsertReviewRow(ev.agent, {
+            chars: Number(row?.chars || 0) + String(ev.text || '').length,
+            text: `${row?.text || ''}${ev.text || ''}`.slice(-16000),
+            progress: Math.min(94, 8 + ((row?.chars || 0) / 18)),
+            state: 'working',
+            waitingLabel: '模型正在输出方案',
+          });
+          break;
+        }
+
+        case 'review_answer_done':
+          this.upsertReviewRow(ev.agent, {
+            label: ev.label || '',
+            perspective: ev.perspective || '',
+            plan: ev.plan || {},
+            text: ev.text || '',
+            elapsed: Number(ev.elapsed || 0),
+            error: ev.error || '',
+            missing: ev.missing || [],
+            state: ev.error ? 'error' : 'done',
+          });
+          this.setAgentState(ev.agent, ev.error ? 'out' : 'alive');
+          this.liveLabel = ev.error
+            ? `${ev.agent} 作答失败，已记为缺席`
+            : `${ev.agent} 已提交方案`;
+          break;
+
+        case 'review_labels':
+          for (const item of ev.labels || []) {
+            this.upsertReviewRow(item.agent, {
+              label: item.label,
+              perspective: item.perspective || '',
+            });
+          }
+          break;
+
+        case 'review_judge_start':
+          this.reviewPhase = 'judging';
+          this.reviewJudgeResult = null;
+          this.liveLabel = ev.retried ? '裁判正在重试评审' : '裁判正在匿名评分';
+          this.beginStage(this.reviewJudge?.name || '裁判', '裁判正在阅读匿名方案');
+          break;
+
+        case 'review_judge_retry':
+          this.liveLabel = '评审 JSON 无法解析，正在重试';
+          break;
+
+        case 'review_judge_done':
+          this.reviewJudgeResult = {
+            scores: ev.scores || {},
+            totals: ev.totals || {},
+            ranking: ev.ranking || [],
+            recommended: ev.recommended || '',
+            recommended_agent: ev.recommended_agent || '',
+            reasons: ev.reasons || {},
+            risks: ev.risks || {},
+            rejections: ev.rejections || {},
+          };
+          this.reviewAnomalies = [
+            ...this.reviewAnomalies,
+            ...(ev.anomalies || []),
+          ];
+          this.reviewPhase = 'synthesis';
+          this.winnerName = ev.recommended_agent || '';
+          this.liveLabel = ev.recommended_agent
+            ? `裁判推荐 ${ev.recommended_agent}`
+            : '评分完成';
+          break;
+
+        case 'review_synthesis_done':
+          this.reviewPhase = 'done';
+          this.reviewSynthesis = ev.text || '';
+          this.reviewSynthesisSections = ev.sections || {};
+          if (ev.error) {
+            this.reviewAnomalies = [...this.reviewAnomalies, { detail: ev.error }];
+          }
+          this.final = this.reviewRecommendedAgent
+            ? { agent: this.reviewRecommendedAgent, text: ev.text || '' }
+            : null;
+          this.liveLabel = '评审完成，推荐与整合建议已生成';
+          break;
+
+        case 'review_absent':
+          this.reviewAbsent = [
+            ...this.reviewAbsent.filter((item) => item.agent !== ev.agent),
+            { agent: ev.agent, reason: ev.reason },
+          ];
           break;
 
         case 'agent_info': {
@@ -3020,6 +3551,7 @@ Vue.createApp({
             calls: Number(ev.calls || 0),
             tokens_estimate: Number(ev.tokens_estimate || 0),
             wall_clock: Number(ev.wall_clock || 0),
+            per_model: ev.per_model || {},
           };
           break;
         }
@@ -3067,13 +3599,17 @@ Vue.createApp({
           this.running = false;
           this.status = this.status === 'error' ? 'error' : 'done';
           this.statusText = this.status === 'error' ? '失败' : '已结束';
-          this.liveLabel = this.final ? '比赛结束，可以回看全过程' : '比赛结束';
+          this.liveLabel = this.runMode === 'review'
+            ? '方案评审结束，可以查看推荐与整合建议'
+            : this.final ? '比赛结束，可以回看全过程' : '比赛结束';
           this.rounds.forEach((round) => { round.thinking = []; });
           this.modelOutputs = {};
           this.liveFollow = true;
           this.elapsed = Number(ev.duration || this.elapsed);
           this.activeAgent = this.winnerName || '';
-          this.activeStage = this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
+          this.activeStage = this.runMode === 'review'
+            ? (this.reviewRecommendedAgent ? `${this.reviewRecommendedAgent} 获推荐` : '评审结束')
+            : this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
           this.stageStartedAt = 0;
           this.votingMode = false;
           this.waitingMode = false;
@@ -3094,6 +3630,7 @@ Vue.createApp({
         this.resetArena();
         this.goPage('venue');
         this.proposition = data.run.proposition || this.proposition;
+        this.runMode = data.run.mode === 'review' ? 'review' : 'debate';
         this.running = true;
         this.status = 'running';
         this.statusText = '接续中';
@@ -3127,7 +3664,10 @@ Vue.createApp({
 
         this.resetArena();
         this.proposition = preset.proposition || '';
+        this.runMode = preset.mode === 'debate' ? 'debate' : 'review';
         this.mode = preset.vote_mode || 'eliminate';
+        this.reviewJudgeId = preset.judge_model_id || '';
+        this.diversify = preset.diversify !== false;
         this.speechMode = preset.speech_mode || 'parallel_buffered';
         this.timeout = Number(preset.timeout) || 240;
         this.background = preset.background || '';
@@ -3137,9 +3677,12 @@ Vue.createApp({
         this.propOpen.criteria = Boolean(this.criteria.length);
 
         const missing = preset.missing_models || [];
-        if (missing.length || !preset.resolved) {
+        const missingJudge = preset.missing_judge;
+        if (missing.length || missingJudge || !preset.resolved) {
           const names = missing.map((item) => item.name).join('、') || '部分参赛模型';
-          this.hint = `预设已载入，但 ${names} 已删除、改名或无法唯一匹配，请重新选择后再开赛。`;
+          this.hint = missingJudge
+            ? '预设已载入，但裁判模型配置不存在，请重新选择裁判后再开赛。'
+            : `预设已载入，但 ${names} 已删除、改名或无法唯一匹配，请重新选择后再开赛。`;
           this.hintError = true;
           this.hintOk = false;
         } else {
@@ -3174,10 +3717,8 @@ Vue.createApp({
         this.viewingHistoryId = id;
         this.canReuseCurrentRun = (transcript.setup?.model_ids || []).length >= 2;
         this.proposition = transcript.proposition || this.proposition;
+        this.runMode = transcript.mode === 'review' ? 'review' : 'debate';
         this.mode = transcript.vote_mode || 'eliminate';
-        this.status = 'done';
-        this.statusText = '历史回放';
-        this.liveLabel = '历史提问回放';
         this.participants = (transcript.participants || []).map((p) => ({
           name: p.name,
           label: p.label,
@@ -3186,7 +3727,49 @@ Vue.createApp({
           lastRole: '',
           lastElapsed: 0,
         }));
-        this.winnerName = transcript.winner || '';
+        this.reviewJudge = transcript.judge || null;
+        const labelMap = Object.fromEntries(
+          (transcript.labels || []).map((item) => [item.agent, item]),
+        );
+        this.reviewRows = (transcript.answers || []).map((answer) => ({
+          agent: answer.agent,
+          label: labelMap[answer.agent]?.label || '',
+          model: this.participants.find((item) => item.name === answer.agent)?.label || '',
+          perspective: answer.perspective || labelMap[answer.agent]?.perspective || '',
+          text: answer.text || '',
+          plan: answer.plan || {},
+          elapsed: Number(answer.elapsed || 0),
+          chars: String(answer.text || '').length,
+          progress: 100,
+          state: answer.error ? 'error' : 'done',
+          statusLabel: answer.error ? '缺席' : '已提交',
+          waitingLabel: '方案已提交',
+          missing: answer.missing || [],
+          error: answer.error || '',
+        }));
+        if (transcript.scores) {
+          this.reviewJudgeResult = {
+            scores: transcript.scores || {},
+            totals: transcript.totals || {},
+            ranking: transcript.ranking || [],
+            recommended: transcript.recommended || '',
+            recommended_agent: transcript.recommended_agent || '',
+            reasons: transcript.reasons || {},
+            risks: transcript.risks || {},
+            rejections: transcript.rejections || {},
+          };
+        }
+        this.reviewSynthesis = transcript.synthesis || '';
+        this.reviewSynthesisSections = transcript.synthesis_sections || null;
+        this.reviewAbsent = transcript.absent || [];
+        this.reviewAnomalies = transcript.anomalies || [];
+        this.reviewPhase = transcript.mode === 'review'
+          ? (transcript.synthesis ? 'done' : transcript.scores ? 'synthesis' : 'answers')
+          : '';
+        this.status = 'done';
+        this.statusText = '历史回放';
+        this.liveLabel = '历史提问回放';
+        this.winnerName = transcript.recommended_agent || transcript.winner || '';
         for (const record of transcript.rounds || []) {
           const round = this.ensureRound(record.no);
           round.order = record.order || [];
@@ -3232,7 +3815,12 @@ Vue.createApp({
         this.stopReason = transcript.stop_reason || '';
         this.converged = Boolean(transcript.converged);
         this.spread = null;
-        if (transcript.winner && transcript.final_answer) {
+        if (transcript.mode === 'review' && transcript.synthesis) {
+          this.final = {
+            agent: transcript.recommended_agent || '',
+            text: transcript.synthesis,
+          };
+        } else if (transcript.winner && transcript.final_answer) {
           this.final = { agent: transcript.winner, text: transcript.final_answer };
         }
         this.currentRound = Math.max(0, ...((transcript.rounds || []).map((r) => Number(r.no) || 0)));

@@ -1,0 +1,169 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from apps.arena.agent import CallResult
+from apps.arena.events import RecordingSink
+from apps.arena.review import ReviewArena, ReviewConfig, parse_judgement, parse_plan
+
+
+class ReviewAgent:
+    def __init__(self, name: str, plan_name: str, score: float):
+        self.name = name
+        self.label = f"model-{name}"
+        self.model = self.label
+        self.config_id = 0
+        self.path = "builtin://review"
+        self.plan_name = plan_name
+        self.score = score
+        self.prompts = []
+        self.calls = 0
+
+    def ask(self, prompt, timeout=0, retries=0, on_output=None):
+        self.calls += 1
+        self.prompts.append(prompt)
+        if "匿名方案" in prompt:
+            labels = [
+                part.split("】", 1)[0].removeprefix("【")
+                for part in prompt.split("【匿名方案】", 1)[1].split("【")[1:]
+            ][:2]
+            labels = [label for label in labels if label.startswith("方案")]
+            scores = {
+                label: {
+                    "可行性": self.score if label == "方案1" else 7,
+                    "正确性": self.score if label == "方案1" else 7,
+                    "完备性": self.score if label == "方案1" else 7,
+                    "差异度": self.score if label == "方案1" else 7,
+                }
+                for label in labels
+            }
+            text = json.dumps(
+                {
+                    "scores": scores,
+                    "ranking": labels,
+                    "recommended": labels[0],
+                    "reasons": {labels[0]: "方案步骤完整，差异明确，可以进入小范围验证。"},
+                    "risks": {labels[0]: "风险在于首轮验证样本不足，需要设置止损线。"},
+                    "rejections": {labels[1]: "方案缺少可验证的止损条件，执行成本也没有上限。"},
+                },
+                ensure_ascii=False,
+            )
+            return CallResult(text=text, elapsed=0)
+        if "整合建议" in prompt:
+            return CallResult(
+                text=(
+                    "【推荐结论】推荐方案1，先做最小闭环。\n"
+                    "【关键理由】步骤清晰。\n"
+                    "【必须吸收】无跨方案补充\n"
+                    "【整合方案】两周验证。\n"
+                    "【前提与失效条件】样本不足时失效。"
+                ),
+                elapsed=0,
+            )
+        text = (
+            f"【方案名】{self.plan_name}\n"
+            "【核心主张】先做小范围验证。\n"
+            "【做法步骤】访谈；原型；灰度。\n"
+            "【代价】两周人力。\n"
+            "【风险】样本偏差。\n"
+            "【与主流做法的差异】先验证后扩张。"
+        )
+        if on_output:
+            on_output(text)
+        return CallResult(text=text, elapsed=0)
+
+
+class ReviewArenaTest(unittest.TestCase):
+    def test_review_is_anonymous_and_uses_n_plus_two_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            agents = [ReviewAgent("甲", "精益验证", 9), ReviewAgent("乙", "全面铺开", 6)]
+            judge = ReviewAgent("裁判", "裁判", 8)
+            judge.config_id = 99
+            judge.score = 8
+            sink = RecordingSink()
+            result = ReviewArena(
+                agents,
+                judge,
+                ReviewConfig(
+                    proposition="是否应该先做小范围验证",
+                    out_dir=Path(tmp),
+                    run_id="fixed-seed",
+                ),
+                sink=sink,
+            ).run()
+
+            judge_prompt = next(
+                prompt for prompt in judge.prompts if "匿名方案" in prompt
+            )
+
+        self.assertEqual(result.budget["calls"], 4)
+        self.assertNotIn("甲", judge_prompt)
+        self.assertNotIn("乙", judge_prompt)
+        self.assertIn("方案1", judge_prompt)
+        self.assertEqual(len(result.labels), 2)
+        self.assertEqual(result.schema_version, 4)
+        self.assertTrue(result.recommended_agent)
+        self.assertTrue(result.synthesis_sections["recommendation"])
+        self.assertTrue(any(event["kind"] == "review_judge_done" for event in sink.events))
+
+    def test_plan_parser_marks_missing_sections(self) -> None:
+        plan, missing = parse_plan("【方案名】A\n【核心主张】B")
+
+        self.assertEqual(plan["name"], "A")
+        self.assertIn("风险", missing)
+
+    def test_judge_parser_clamps_scores_and_flags_missing_dimensions(self) -> None:
+        parsed, anomalies = parse_judgement(
+            json.dumps(
+                {
+                    "scores": {
+                        "方案1": {
+                            "可行性": 11,
+                            "正确性": 8,
+                            "完备性": 7,
+                        }
+                    },
+                    "ranking": ["方案1"],
+                    "recommended": "方案1",
+                    "reasons": {"方案1": "理由"},
+                },
+                ensure_ascii=False,
+            ),
+            ["方案1"],
+        )
+
+        self.assertEqual(parsed["scores"]["方案1"]["可行性"], 10)
+        self.assertNotIn("差异度", parsed["scores"]["方案1"])
+        codes = {item["code"] for item in anomalies}
+        self.assertIn("clamped_dimension", codes)
+        self.assertIn("missing_dimension", codes)
+
+    def test_judge_parser_marks_recommendation_mismatch(self) -> None:
+        parsed, anomalies = parse_judgement(
+            json.dumps(
+                {
+                    "scores": {
+                        "方案1": {
+                            "可行性": 9, "正确性": 9, "完备性": 9, "差异度": 9,
+                        },
+                        "方案2": {
+                            "可行性": 8, "正确性": 8, "完备性": 8, "差异度": 8,
+                        },
+                    },
+                    "ranking": ["方案1", "方案2"],
+                    "recommended": "方案2",
+                    "reasons": {"方案2": "方案2 更贴近约束。"},
+                    "rejections": {"方案1": "方案1 的执行细节和止损条件仍不够完整。"},
+                },
+                ensure_ascii=False,
+            ),
+            ["方案1", "方案2"],
+        )
+
+        self.assertEqual(parsed["recommended"], "方案2")
+        self.assertIn("recommend_mismatch", {item["code"] for item in anomalies})
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -101,7 +101,7 @@ class DecideVoteTest(unittest.TestCase):
 
 
 class TiebreakVoteTest(unittest.TestCase):
-    def test_tiebreak_is_resolved_without_random_voter_removal(self) -> None:
+    def test_exhausted_tiebreak_is_marked_undecided(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             sink = RecordingSink()
             arena = Arena(
@@ -136,8 +136,9 @@ class TiebreakVoteTest(unittest.TestCase):
                     [a, b], [a, b], record, [], 2
                 )
 
-        # 加赛仍然平票 → 走三级确定性裁决，绝不随机移出投票人。
-        self.assertIsNotNone(out)
+        # 加赛仍然平票 → 走三级裁决；完全相同时明确未决，不按姓名兜底。
+        self.assertIsNone(out)
+        self.assertIn("未决", tiebreak or "")
         self.assertNotIn("随机移出投票人", tiebreak or "")
         self.assertEqual(len([s for s in record.speeches if s.role == "平票加赛"]), 2)
         self.assertTrue(any(v.stage.startswith("tiebreak") for v in record.votes))
@@ -341,11 +342,29 @@ class WeightedVoteTest(unittest.TestCase):
 
         self.assertEqual(counts["b"], 1.5)
 
-    def test_judge_weight_drops_to_zero_with_two_alive(self) -> None:
+    def test_judge_keeps_half_weight_with_two_alive(self) -> None:
         arena = self.make_arena()
 
         self.assertEqual(arena._judge_weight_for(3), 0.5)
-        self.assertEqual(arena._judge_weight_for(2), 0.0)
+        self.assertEqual(arena._judge_weight_for(2), 0.5)
+
+    def test_zero_weight_voter_is_not_called_or_listed(self) -> None:
+        arena = self.make_arena()
+        arena.cfg.judge_weight = 0
+        judge = MockAgent("judge")
+        judge.calls = 0
+        arena._judges = [judge]
+
+        votes = arena._collect_votes(
+            [judge, arena.agents[0], arena.agents[1]],
+            [arena.agents[0], arena.agents[1]],
+            [],
+            [],
+            2,
+        )
+
+        self.assertEqual(judge.calls, 0)
+        self.assertNotIn(judge.name, [vote.voter for vote in votes])
 
 
 class ConvergenceTest(unittest.TestCase):
@@ -379,6 +398,19 @@ class ConvergenceTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(result.rounds), 2)
         self.assertIsNotNone(result.winner)
+
+    def test_convergence_round_still_names_a_winner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(Arena, "_stance_spread", return_value=0):
+                result = Arena(
+                    [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+                    ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                ).run()
+
+        self.assertTrue(result.converged)
+        self.assertIn("收敛", result.stop_reason)
+        self.assertIsNotNone(result.winner)
+        self.assertEqual(len(result.rounds), 3)
 
 
 class StanceSpreadTest(unittest.TestCase):

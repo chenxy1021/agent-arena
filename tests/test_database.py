@@ -29,6 +29,26 @@ class HistoryDatabaseTest(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], "done")
         self.assertEqual(row["winner"], "mock#2")
+        self.assertEqual(row["mode"], "debate")
+
+    def test_old_database_gets_mode_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "arena.db"
+            with database._connect(db_path) as conn:
+                conn.execute(
+                    "CREATE TABLE runs (id TEXT PRIMARY KEY, proposition TEXT NOT NULL, "
+                    "vote_mode TEXT NOT NULL DEFAULT 'eliminate', status TEXT NOT NULL, "
+                    "winner TEXT, error TEXT, participants INTEGER NOT NULL DEFAULT 0, "
+                    "duration REAL, started_at TEXT, finished_at TEXT, run_dir TEXT, "
+                    "created_ts REAL NOT NULL)"
+                )
+            database.init_db(db_path)
+            with database._connect(db_path) as conn:
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(runs)")
+                }
+
+        self.assertIn("mode", columns)
 
 
 class ModelDatabaseTest(unittest.TestCase):

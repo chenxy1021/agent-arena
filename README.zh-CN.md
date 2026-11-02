@@ -8,16 +8,20 @@
 ![SQLite](https://img.shields.io/badge/SQLite-embedded-003B57?logo=sqlite&logoColor=white)
 
 <div align="center">
-  <img src="docs/screenshots/arena.png" alt="Agent Arena 会场" width="92%">
+  <img src="docs/screenshots/arena.png" alt="Agent Arena 方案评审舱" width="92%">
 </div>
 
-**让多个大模型坐上一张真正的辩论桌，互相质疑、投票、淘汰，最后留下一个可复盘的结论。**
+**让多个大模型坐上一张真正的议事桌：用独立裁判比较可执行方案，或让模型互相辩论、逐轮淘汰。**
 
-Agent Arena 是一个本地优先的多模型辩论应用。不同模型围绕同一个命题独立发言，
-下一轮基于上一轮公开内容互相点评，并通过并发投票和淘汰推进讨论。它输出的是完整
-战报，而不是把多个模型的答案揉进一个不可追踪的 Prompt。
+Agent Arena 是一个本地优先的多模型决策会场，提供两种模式：
 
-页面只展示服务商实际返回的可观察输出，不伪造隐藏思维链。如果兼容服务返回
+- **方案评审**是默认模式。参赛模型独立作答，独立裁判只看到匿名且乱序的
+  方案，再按四个维度评分，最后给出排名、推荐、否决理由与整合建议。
+- **淘汰辩论**让模型围绕同一命题跨轮交锋、并发投票、淘汰最弱观点，并完整
+  保留论证与裁决过程。
+
+它输出的是可审计战报，而不是把多个答案揉进一个不可追踪的 Prompt。页面只展示
+服务商实际返回的可观察输出，不伪造隐藏思维链；如果兼容服务返回
 `reasoning_content` 或 `reasoning`，页面会按服务商实际流式返回的内容展示。
 
 ## 核心能力
@@ -25,25 +29,38 @@ Agent Arena 是一个本地优先的多模型辩论应用。不同模型围绕�
 | 模块 | 能力 |
 | --- | --- |
 | 模型 | 登记任意兼容 OpenAI Chat Completions 的接口 |
-| 赛制 | 独立开场、跨轮点评、投票、淘汰、加赛、最终总结 |
-| 发言 | 并行生成后同屏公开，或逐个实时流式输出 |
-| 裁决 | 淘汰最弱观点，或评选最该留下的观点 |
-| 证据 | 多维评分、主张台账、立场离散度、完整轮次记录 |
-| 稳定性 | 并发投票、超时重试、中止控制、SSE 心跳 |
-| 记录 | 历史检索、最终结论置顶、复用历史预设再赛 |
+| 方案评审 | 并行独立作答、匿名乱序评审、四维评分、推荐与整合建议 |
+| 淘汰辩论 | 独立开场、跨轮点评、并发投票、淘汰、加赛与最终总结 |
+| 裁决 | 默认选择最可行方案，或在辩论中留下最强观点 |
+| 证据 | 评分矩阵、否决理由、主张台账、立场离散度和完整轮次记录 |
+| 稳定性 | 超时、重试、中止控制、SSE 进度心跳和可读失败原因 |
+| 记录 | 模式化历史、档案检索、预设复用，禁止跨模式混排 |
 | 界面 | 桌面与移动端自适应，支持亮色/深色主题，中英文随时切换 |
+
+## 两种模式
+
+| | 方案评审 | 淘汰辩论 |
+| --- | --- | --- |
+| 适合 | 快速比较多个可执行方案 | 对争议观点做压力测试 |
+| 参赛模型 | 2-8 个 | 2-8 个 |
+| 裁判 | 一名不参赛的独立模型 | 参赛模型互评 |
+| 典型成本 | `N + 2` 次调用 | 多轮推进，通常更慢 |
+| 产出 | 对比矩阵、推荐、否决理由、整合方案 | 胜者或未决结论，以及完整交锋过程 |
+| 默认 | 是 | 可选深挖模式 |
+
+评审采用匿名与确定性乱序，裁判只看到 `方案1...方案N`，看不到真实模型名。每个
+未被推荐的方案都必须给出具体理由，最终整合建议还要说明前提与失效条件。
 
 ## 界面
 
-| 登记页 | 记录页 |
+| 登记页 | 评审记录 |
 | --- | --- |
-| ![登记页](docs/screenshots/register.png) | ![记录页](docs/screenshots/record.png) |
+| ![登记页](docs/screenshots/register.png) | ![评审记录](docs/screenshots/record.png) |
 | **档案对比** | **亮色模式** |
 | ![档案对比](docs/screenshots/archive.png) | ![亮色模式](docs/screenshots/arena-light.png) |
 
-会场会持续展示生成、投票、加赛和归档状态。每张选票会画出方向轨迹，并在
-`投票人 → 目标` 流向板中重复展示；档案对比使用统一对齐网格；右上角可切换
-亮色/深色主题，选择会保存在本地。
+实时评审舱会展示方案提交、匿名评审、评分矩阵、推荐、否决理由和整合步骤。
+辩论会持续展示生成、投票、加赛和归档状态。亮色/深色主题与语言选择会保存在本地。
 
 ## 快速开始
 
@@ -51,7 +68,8 @@ Agent Arena 是一个本地优先的多模型辩论应用。不同模型围绕�
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
-- 至少两个支持 `POST /chat/completions` 的模型配置
+- 方案评审至少需要三个模型配置：两个参赛模型加一个独立裁判
+- 淘汰辩论至少需要两个模型配置
 
 ```bash
 git clone https://github.com/chenxy1021/agent-arena.git
@@ -75,12 +93,14 @@ uv run uvicorn config.asgi:app --reload
 
 第一次使用：
 
-1. 打开「模型」，登记至少两个模型。
-2. 打开「登记」，选择参赛阵容并填写命题。
-3. 选择发言方式和胜负规则。
-4. 开始比赛。
+1. 打开「模型」，登记需要使用的接口。
+2. 打开「登记」，选择「方案评审」或「淘汰辩论」。
+3. 选择 2-8 个参赛模型；方案评审还需要选择一个不参赛的独立裁判。
+4. 填写命题、背景、约束与附加评判要求。
+5. 开始比赛。
 
-「预览一场」只使用前端本地假数据，不请求模型接口，也不会覆盖已保存的模型配置。
+「预览一场」只使用前端本地 Mock 数据，不请求模型接口，不创建后端 run，也不会
+覆盖已保存的模型配置。
 
 ## 模型接口
 
@@ -106,21 +126,23 @@ Base URL: https://api.openai.com/v1
 ```mermaid
 flowchart LR
     UI[Vue 3 界面] -->|REST + SSE| API[FastAPI 路由]
-    API --> MANAGER[比赛生命周期管理器]
-    MANAGER --> ARENA[辩论赛制引擎]
-    ARENA --> PROVIDERS[OpenAI-compatible 适配器]
+    API --> MANAGER[运行生命周期管理器]
+    MANAGER --> REVIEW[方案评审引擎]
+    MANAGER --> DEBATE[辩论赛制引擎]
+    REVIEW --> PROVIDERS[OpenAI-compatible 适配器]
+    DEBATE --> PROVIDERS
     MANAGER --> DB[(SQLite)]
-    ARENA --> RUNS[transcript.json + debate.md]
+    REVIEW --> REVIEWRUNS[transcript.json + review.md]
+    DEBATE --> DEBATERUNS[transcript.json + debate.md]
 ```
 
-当前执行模型是确定性的流水线，每轮内部做并行 fan-out / fan-in，不是自主多
-Agent 蜂群：
+当前执行模型是确定性的流水线，内部做并行 fan-out / fan-in，不是自主多 Agent
+蜂群：
 
-1. 生命周期管理器创建独立比赛。
-2. 赛制引擎构造全部 Prompt 并应用辩论规则。
-3. 规则允许时并行调用模型。
-4. 使用当前 JSON ballot schema 解析投票。
-5. 通过 SSE 推送过程，并在本地归档结果。
+1. 生命周期管理器创建独立运行，并校验模式、阵容和裁判独立性。
+2. 方案评审并行收集独立答案，匿名乱序后交给裁判评分并生成整合建议。
+3. 淘汰辩论构造全部 Prompt，并应用轮次、票权、淘汰与平票状态机。
+4. 通过 SSE 推送过程，并在本地归档结果。
 
 这样成本、顺序、中止和战报生成都可预测。
 
@@ -138,21 +160,22 @@ Agent 蜂群：
 
 - 精确转发 SSE delta 与服务商公开的 reasoning；
 - 控制超时、重试和中止语义；
-- 确定性解析选票、平票和加赛；
+- 确定性解析结构化评审与选票；
 - 保证实时会场的事件顺序；
-- 生成可复现战报。
+- 生成可复现、按模式隔离的战报。
 
-LangChain 不提供辩论赛制；在会场与服务商响应之间增加抽象层，反而会让实时体验
-更难控制。如果未来增加工具调用、外部检索或依赖图任务，可以为这些新能力单独
-引入 LangChain；核心赛制仍应保持显式状态机。
+LangChain 不提供评审量表或辩论赛制；在会场与服务商响应之间增加抽象层，反而会
+让实时体验更难控制。如果未来增加工具调用、外部检索或依赖图任务，可以为这些新
+能力单独引入 LangChain；核心会场仍应保持显式状态机。
 
 ## 项目结构
 
 ```text
 arena.py                  本地服务启动器
 apps/arena/api.py         HTTP 路由与 SSE
-apps/arena/services.py    比赛生命周期与中止
-apps/arena/moderator.py   赛制、投票、加赛与战报模型
+apps/arena/services.py    运行生命周期、模式分发与中止
+apps/arena/review.py      方案评审、匿名评分与整合建议
+apps/arena/moderator.py   辩论赛制、投票、加赛与战报模型
 apps/arena/providers.py   OpenAI-compatible 流式适配器
 apps/arena/database.py    SQLite 模型登记与历史索引
 apps/arena/report.py      JSON 与 Markdown 战报
@@ -171,22 +194,23 @@ tests/                    Mock 与回环测试
 | `PUT` | `/api/models/{id}` | 更新模型 |
 | `DELETE` | `/api/models/{id}` | 删除模型 |
 | `POST` | `/api/models/suggest-name` | 调用模型生成显示名 |
-| `POST` | `/api/runs` | 创建并启动比赛 |
+| `POST` | `/api/runs` | 创建并启动方案评审或淘汰辩论 |
 | `POST` | `/api/runs/{id}/stop` | 请求中止比赛 |
 | `GET` | `/api/runs/active` | 查询当前活动比赛 |
 | `GET` | `/api/runs/{id}/events` | 订阅 SSE 事件流 |
-| `GET` | `/api/history` | 列出历史比赛 |
+| `GET` | `/api/history` | 列出带模式信息的历史比赛 |
 | `GET` | `/api/history/{id}` | 读取完整战报 |
 | `GET` | `/api/history/{id}/preset` | 构造可复用的比赛预设 |
 
-SSE 事件包含发言流、等待心跳、并行进度、投票进度、评分、加赛、淘汰、主张、
+方案评审 SSE 包含独立作答进度、匿名标签、裁判重试、评分结果、推荐与整合建议。
+淘汰辩论 SSE 包含发言流、等待心跳、并行进度、投票进度、评分、加赛、淘汰、主张、
 收敛状态和归档完成。
 
 ## 数据与安全
 
 - `arena.db`：本地 SQLite 模型登记与历史索引。
 - `runs/<run_id>/transcript.json`：完整结构化战报。
-- `runs/<run_id>/debate.md`：可读 Markdown 战报。
+- `runs/<run_id>/review.md` 或 `debate.md`：可读 Markdown 战报。
 
 API Key 以明文保存在本地数据库，模型列表接口不会返回 Key。可以指定其他数据库
 路径：
@@ -223,8 +247,8 @@ git diff --check
 
 - 用户系统与每用户模型归属。
 - 共享部署控制与额度限制。
-- 跨历史比赛的模型对比分析。
-- 在核心赛制之外增加可选的研究/工具调用能力。
+- 多裁判评审团与人类采纳/驳回入口。
+- 在核心评审和辩论引擎之外增加可选的研究/工具调用能力。
 
 ---
 

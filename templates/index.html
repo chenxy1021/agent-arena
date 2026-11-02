@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/ui-v3.css">
 <link rel="stylesheet" href="/static/ui-v5.css">
+<link rel="stylesheet" href="/static/ui-v6.css">
 </head>
 <body>
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -109,8 +110,10 @@
       <header class="page-head register-head">
         <div class="register-head__copy">
           <span class="register-head__eyebrow">Session setup</span>
-          <h1>布置今天的辩论</h1>
-          <p>定下命题，挑选阵容，调整赛制。剩下的交给议事舱。</p>
+          <h1>{{ runMode === 'review' ? '布置一场方案评审' : '布置今天的辩论' }}</h1>
+          <p>{{ runMode === 'review'
+            ? '多个模型独立给方案，独立裁判匿名评分，最后给出推荐与整合建议。'
+            : '定下命题，挑选阵容，调整赛制。剩下的交给议事舱。' }}</p>
         </div>
         <div class="register-head__counter" aria-label="参赛席位">
           <span>参赛席位</span>
@@ -121,6 +124,25 @@
 
       <div class="register-layout">
         <div class="register-main">
+          <section class="mode-picker" aria-label="比赛模式">
+            <button type="button" class="mode-card" :class="{ active: runMode === 'review' }"
+              :aria-pressed="runMode === 'review'" @click="runMode = 'review'">
+              <span class="mode-card__index">01</span>
+              <b>方案评审</b>
+              <em>默认</em>
+              <p>各自独立作答 · 匿名裁判评分 · 推荐与整合</p>
+              <small>约 N+2 次调用 · 1–3 分钟</small>
+            </button>
+            <button type="button" class="mode-card" :class="{ active: runMode === 'debate' }"
+              :aria-pressed="runMode === 'debate'" @click="runMode = 'debate'">
+              <span class="mode-card__index">02</span>
+              <b>淘汰辩论</b>
+              <em>深挖</em>
+              <p>逐轮交锋 · 互评淘汰 · 最终总结</p>
+              <small>{{ debateCost }}</small>
+            </button>
+          </section>
+
           <section class="proposition">
             <div class="register-section-head">
               <span class="register-section-head__index">01</span>
@@ -244,7 +266,7 @@
               </div>
             </div>
 
-            <div class="rule__section">
+            <div v-if="runMode === 'debate'" class="rule__section">
               <span class="rule__label">胜负规则</span>
               <div class="segmented" role="group" aria-label="比赛规则">
                 <span class="segmented__indicator" :style="ruleIndicatorStyle" aria-hidden="true"></span>
@@ -258,7 +280,7 @@
               </p>
             </div>
 
-            <div class="rule__section">
+            <div v-if="runMode === 'debate'" class="rule__section">
               <span class="rule__label">发言方式</span>
               <div class="segmented segmented--split" role="group" aria-label="发言方式">
                 <button type="button" :class="{ active: speechMode === 'parallel_buffered' }"
@@ -273,9 +295,36 @@
               </p>
             </div>
 
+            <div v-if="runMode === 'review'" class="rule__section">
+              <label class="rule__label" for="judge-model">独立裁判</label>
+              <select id="judge-model" class="mode-select" v-model="reviewJudgeId">
+                <option :value="''" disabled>
+                  {{ judgeCandidates.length ? '选择不参赛的模型' : '没有可用裁判模型' }}
+                </option>
+                <option v-for="model in judgeCandidates" :key="'judge-' + model.id" :value="model.id">
+                  {{ model.name }} · {{ model.model }}
+                </option>
+              </select>
+              <p class="rule__note rule__note--sm" :class="{ bad: !judgeCandidates.length }">
+                {{ judgeCandidates.length
+                  ? '裁判不提交方案，只看到乱序后的匿名方案。'
+                  : '需先在模型页添加一个不参赛的裁判模型。' }}
+              </p>
+            </div>
+
+            <div v-if="runMode === 'review'" class="rule__section">
+              <label class="mode-switch">
+                <span>
+                  <b>分配差异化视角</b>
+                  <small>成本 / 增长 / 风险 / 体验 / 技术</small>
+                </span>
+                <input type="checkbox" v-model="diversify">
+              </label>
+            </div>
+
             <div class="rule__section">
               <label class="rule__time">
-                <span>单次发言限时</span>
+                <span>{{ runMode === 'review' ? '单次调用限时' : '单次发言限时' }}</span>
                 <span class="rule__time-control">
                   <input v-model.number="timeout" type="number" min="5" step="5"
                     aria-label="单次发言限时秒数">
@@ -284,7 +333,7 @@
               </label>
             </div>
 
-            <div class="rule__section">
+            <div v-if="runMode === 'debate'" class="rule__section">
               <span class="rule__label">赛程预览</span>
               <div class="rule__plan" aria-label="赛程规则">
                 <span><i>01</i><b>独立开场</b><em>首轮保留分歧，不判收敛</em></span>
@@ -293,6 +342,17 @@
               </div>
               <p class="rule__note rule__note--sm">
                 本轮上限 {{ Math.max(selectedModelIds.length, 2) }} 轮；收敛读数只展示赛况，不跳过裁决。
+              </p>
+            </div>
+            <div v-else class="rule__section">
+              <span class="rule__label">评审流程</span>
+              <div class="rule__plan" aria-label="方案评审流程">
+                <span><i>01</i><b>独立作答</b><em>参赛模型并行提交六段式方案</em></span>
+                <span><i>02</i><b>匿名评审</b><em>裁判按四项维度评分与排名</em></span>
+                <span><i>03</i><b>推荐整合</b><em>给出理由、风险和执行步骤</em></span>
+              </div>
+              <p class="rule__note rule__note--sm">
+                {{ selectedModelIds.length }} 次作答 + 2 次裁判调用；评分仅在本模式内可比。
               </p>
             </div>
           </section>
@@ -307,7 +367,7 @@
               <button type="button" class="ghost-button" :disabled="running" @click="startDemo">
                 预览一场
               </button>
-              <button type="button" class="cta" :disabled="running || selectedModelIds.length < 2"
+              <button type="button" class="cta" :disabled="running || !canStart"
                 @click="startMatch">开始比赛</button>
             </div>
           </div>
@@ -326,8 +386,13 @@
         </div>
         <div class="council-hud__right">
           <span class="council-hud__meta">
-            {{ mode === 'support' ? '评选制' : '淘汰制' }} · 限时 {{ timeout }}s ·
-            {{ aliveCount }} 人存活 · 第 {{ currentRound || 0 }} 轮
+            <template v-if="runMode === 'review'">
+              方案评审 · 限时 {{ timeout }}s · {{ participants.length }} 份方案
+            </template>
+            <template v-else>
+              {{ mode === 'support' ? '评选制' : '淘汰制' }} · 限时 {{ timeout }}s ·
+              {{ aliveCount }} 人存活 · 第 {{ currentRound || 0 }} 轮
+            </template>
           </span>
           <span class="council-hud__readouts">
             <spread-gauge :spread="spreadValue"></spread-gauge>
@@ -363,7 +428,144 @@
         </span>
       </div>
 
-      <div class="council-workspace">
+      <div v-if="runMode === 'review'" class="review-stage">
+        <template v-if="participants.length">
+          <header class="review-stage__head">
+            <div>
+              <span class="review-stage__eyebrow">REVIEW CHAMBER</span>
+              <h2>{{ reviewPhaseLabel }}</h2>
+              <p>{{ reviewPhaseDescription }}</p>
+            </div>
+            <div class="review-stage__judge">
+              <span>独立裁判</span>
+              <b>{{ reviewJudge?.name || '等待裁判' }}</b>
+              <small>{{ reviewJudge?.label || '不公开真实模型名给参赛者' }}</small>
+            </div>
+          </header>
+
+          <div class="review-flow" role="status" aria-live="polite">
+            <span v-for="step in reviewSteps" :key="step.key" :class="step.className">
+              <i>{{ step.index }}</i>
+              <b>{{ step.label }}</b>
+              <small>{{ step.detail }}</small>
+            </span>
+          </div>
+
+          <div class="review-layout">
+            <section class="review-answers" aria-label="方案列表">
+              <article v-for="row in reviewRows" :key="'review-' + row.agent"
+                class="review-answer" :class="row.state"
+                :style="{ '--team-color': agentColor(row.agent) }">
+                <header>
+                  <robot-avatar :name="row.agent" :spec="robotSpec(row.agent)"
+                    :color="agentColor(row.agent)"
+                    :state="row.state === 'working' ? 'thinking' : row.state === 'error' ? 'out' : 'idle'"
+                    :size="34"></robot-avatar>
+                  <span>
+                    <b>{{ row.agent }}</b>
+                    <small>{{ row.model }} · {{ row.perspective || '未分配视角' }}</small>
+                  </span>
+                  <em>{{ row.statusLabel }}</em>
+                </header>
+                <div v-if="row.error" class="review-answer__error">{{ row.error }}</div>
+                <div v-else-if="row.text" class="review-answer__body">
+                  <div v-for="field in reviewPlanFields(row)" :key="row.agent + field.key"
+                    class="review-plan-field">
+                    <span>{{ field.label }}</span>
+                    <p>{{ field.value || '—' }}</p>
+                  </div>
+                </div>
+                <div v-else class="review-answer__waiting">
+                  <span class="review-answer__bar"><i :style="{ width: row.progress + '%' }"></i></span>
+                  <p>{{ row.waitingLabel }}</p>
+                </div>
+                <footer>
+                  <span v-if="row.elapsed">{{ row.elapsed.toFixed(1) }}s</span>
+                  <span v-if="row.chars">{{ row.chars.toLocaleString() }} 字符</span>
+                  <span v-if="row.missing?.length">结构缺项：{{ row.missing.join(' / ') }}</span>
+                </footer>
+              </article>
+            </section>
+
+            <aside class="review-verdict" aria-label="评审结果">
+              <section class="review-verdict__hero" :class="{ ready: reviewJudgeResult }">
+                <span>RECOMMENDATION</span>
+                <b>{{ reviewRecommendedAgent || '等待评审' }}</b>
+                <small v-if="reviewJudgeResult">
+                  {{ reviewJudgeResult.recommended }} · 总分 {{ reviewRecommendedTotal }}
+                </small>
+                <p>{{ reviewJudgeResult?.reasons?.[reviewJudgeResult.recommended] || reviewJudgeStatus }}</p>
+              </section>
+
+              <section v-if="reviewScoreRows.length" class="review-matrix">
+                <header>
+                  <h3>方案对比</h3>
+                  <span>仅限本模式内比较</span>
+                </header>
+                <div class="review-matrix__scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">方案</th>
+                        <th v-for="dim in reviewDimensions" :key="dim" scope="col">{{ dim }}</th>
+                        <th scope="col">总分</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in reviewScoreRows" :key="'score-' + row.label"
+                        :class="{ recommended: row.label === reviewJudgeResult?.recommended }">
+                        <th scope="row">
+                          <b>{{ row.agent }}</b>
+                          <small>{{ row.label }} · {{ row.perspective || '未分配' }}</small>
+                        </th>
+                        <td v-for="dim in reviewDimensions" :key="row.label + dim" class="mono">
+                          {{ row.dims[dim] ?? '—' }}
+                        </td>
+                        <td class="mono">{{ row.total }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section v-if="reviewRejections.length" class="review-notes">
+                <h3>未推荐说明</h3>
+                <p v-for="item in reviewRejections" :key="'rej-' + item.label">
+                  <b>{{ item.agent }}</b>{{ item.text }}
+                </p>
+              </section>
+
+              <section v-if="reviewSynthesisSections" class="review-synthesis">
+                <h3>推荐与整合</h3>
+                <div v-for="section in reviewSynthesisList" :key="'syn-' + section.key">
+                  <b>{{ section.label }}</b>
+                  <p v-for="(line, index) in section.lines" :key="'syn-' + section.key + index">
+                    {{ line }}
+                  </p>
+                </div>
+              </section>
+
+              <section v-if="reviewAbsent.length || reviewAnomalies.length" class="review-warnings">
+                <p v-for="item in reviewAbsent" :key="'absent-' + item.agent">
+                  缺席：{{ item.agent }} · {{ item.reason }}
+                </p>
+                <p v-for="(item, index) in reviewAnomalies" :key="'anomaly-' + index">
+                  提示：{{ item.detail }}
+                </p>
+              </section>
+            </aside>
+          </div>
+          <p class="review-stage__foot">匿名评审、顺序已打乱、单裁判主观偏差；样本量为 1，请结合方案全文判断。</p>
+        </template>
+        <div v-else class="council-empty">
+          <span class="council-empty__eyebrow">Review chamber</span>
+          <strong>评审舱待命</strong>
+          <p>先选择参赛方案与独立裁判，再开始评审。</p>
+          <button type="button" class="cta" @click="goPage('register')">布置评审</button>
+        </div>
+      </div>
+
+      <div v-if="runMode !== 'review'" class="council-workspace">
       <div ref="stage" class="council-scene" :style="sceneStyle" :class="fxClass">
         <div class="council-scene__grid" aria-hidden="true"></div>
         <div class="council-scene__light" aria-hidden="true"></div>
@@ -659,7 +861,9 @@
         <div>
           <span class="page-head__eyebrow">Match record / 02</span>
           <h1>{{ proposition || '比赛记录' }}</h1>
-          <p>每一轮发言、每一张选票、每一次出局，都按原样留着。</p>
+          <p>{{ runMode === 'review'
+            ? '每份方案、四个维度的评分、推荐与整合建议都按原样保留。'
+            : '每一轮发言、每一张选票、每一次出局，都按原样留着。' }}</p>
         </div>
         <div class="record-head-tools">
           <button v-if="canReuseCurrentRun && !running"
@@ -677,14 +881,18 @@
         </div>
       </header>
 
-      <div v-if="roundsNewestFirst.length" class="record-overview">
+      <div v-if="runMode === 'review' || roundsNewestFirst.length" class="record-overview">
         <div class="record-overview__identity">
-          <span>Decision dossier</span>
-          <strong>{{ matchOutcome?.label || '已归档' }}</strong>
-          <p>{{ matchOutcome?.detail || '完整保留发言、投票与最终裁决。' }}</p>
+          <span>{{ runMode === 'review' ? 'Review dossier' : 'Decision dossier' }}</span>
+          <strong>{{ runMode === 'review' ? (reviewJudgeResult ? '方案评审' : '评审未完成') : (matchOutcome?.label || '已归档') }}</strong>
+          <p>{{ runMode === 'review'
+            ? '匿名评分只在本模式内可比，不与淘汰辩论混排。'
+            : (matchOutcome?.detail || '完整保留发言、投票与最终裁决。') }}</p>
         </div>
         <div class="record-stat">
-          <span>轮次</span><b>{{ currentRound }}</b><small>rounds</small>
+          <span>{{ runMode === 'review' ? '方案' : '轮次' }}</span>
+          <b>{{ runMode === 'review' ? reviewRows.length : currentRound }}</b>
+          <small>{{ runMode === 'review' ? 'plans' : 'rounds' }}</small>
         </div>
         <div class="record-stat">
           <span>参赛</span><b>{{ participants.length }}</b><small>models</small>
@@ -693,12 +901,78 @@
           <span>用时</span><b>{{ durationText(elapsed) }}</b><small>wall clock</small>
         </div>
         <div class="record-stat record-stat--winner">
-          <span>最终裁决</span><b>{{ winnerName || '未决' }}</b>
-          <small>{{ winnerName ? agentModel(winnerName) : 'no winner' }}</small>
+          <span>{{ runMode === 'review' ? '推荐方案' : '最终裁决' }}</span>
+          <b>{{ runMode === 'review' ? (reviewRecommendedAgent || '未决') : (winnerName || '未决') }}</b>
+          <small>{{ runMode === 'review'
+            ? (reviewJudgeResult?.recommended || 'no recommendation')
+            : (winnerName ? agentModel(winnerName) : 'no winner') }}</small>
         </div>
       </div>
 
-      <div v-if="roundsNewestFirst.length" class="record-layout">
+      <section v-if="runMode === 'review'" class="review-record">
+        <header class="review-record__head">
+          <div>
+            <span>ANONYMOUS REVIEW</span>
+            <h2>{{ reviewJudgeResult ? '评委推荐与方案对比' : '评审未完成' }}</h2>
+          </div>
+          <div class="record-mode-badge">方案评审 · 不可与辩论混排</div>
+        </header>
+
+        <div class="review-record__grid">
+          <article v-for="row in reviewScoreRows" :key="'record-score-' + row.label"
+            class="review-record-card" :class="{ recommended: row.label === reviewJudgeResult?.recommended }"
+            :style="{ '--team-color': agentColor(row.agent) }">
+            <header>
+              <span>{{ row.label }} · {{ row.perspective || '未分配视角' }}</span>
+              <em v-if="row.label === reviewJudgeResult?.recommended">推荐</em>
+            </header>
+            <h3>{{ row.agent }}</h3>
+            <p>{{ reviewAnswerFor(row.agent)?.plan?.claim || '—' }}</p>
+            <div class="review-record-card__scores">
+              <span v-for="dim in reviewDimensions" :key="row.label + dim">
+                <small>{{ dim }}</small><b>{{ row.dims[dim] ?? '—' }}</b>
+              </span>
+              <span class="total"><small>总分</small><b>{{ row.total }}</b></span>
+            </div>
+          </article>
+        </div>
+
+        <div v-if="reviewSynthesisSections" class="review-record__synthesis">
+          <h3>推荐与整合</h3>
+          <div v-for="section in reviewSynthesisList" :key="'record-syn-' + section.key">
+            <b>{{ section.label }}</b>
+            <p v-for="(line, index) in section.lines" :key="'record-syn-' + section.key + index">
+              {{ line }}
+            </p>
+          </div>
+        </div>
+
+        <details v-if="reviewRows.length" class="review-record__plans">
+          <summary>查看全部方案全文</summary>
+          <article v-for="row in reviewRows" :key="'record-plan-' + row.agent">
+            <h3>{{ row.agent }} · {{ row.perspective || '未分配视角' }}</h3>
+            <p v-if="row.error" class="record-error">{{ row.error }}</p>
+            <div v-else class="speech-block__body">
+              <div v-for="field in reviewPlanFields(row)" :key="row.agent + 'rf-' + field.key"
+                class="speech-block__para">
+                <mark>{{ field.label }}</mark>{{ field.value || '—' }}
+              </div>
+            </div>
+          </article>
+        </details>
+
+        <p v-if="reviewAbsent.length || reviewAnomalies.length" class="review-record__warnings">
+          <span v-for="item in reviewAbsent" :key="'record-absent-' + item.agent">
+            缺席：{{ item.agent }} · {{ item.reason }}
+          </span>
+          <span v-for="(item, index) in reviewAnomalies" :key="'record-anomaly-' + index">
+            {{ item.detail }}
+          </span>
+        </p>
+        <p class="review-stage__foot">匿名评审、顺序已打乱、单裁判主观偏差；样本量为 1。</p>
+      </section>
+
+      <div v-if="runMode !== 'review' && roundsNewestFirst.length" class="record-layout">
         <aside class="round-track" aria-label="轮次">
           <button type="button" class="round-track__item" :class="{ active: !recordRoundFilter }"
             @click="recordRoundFilter = 0">
@@ -853,12 +1127,14 @@
 
       <div v-else class="empty-state record-empty">
         <span>No transcript</span>
-        <strong>还没有可阅读的比赛记录</strong>
-        <p>先在登记页定下命题与阵容，完成一场比赛后，这里会保留完整发言和选票。</p>
+        <strong>{{ runMode === 'review' ? '还没有可阅读的评审记录' : '还没有可阅读的比赛记录' }}</strong>
+        <p>{{ runMode === 'review'
+          ? '完成一场方案评审后，这里会保留每份方案、评分、推荐和整合建议。'
+          : '先在登记页定下命题与阵容，完成一场比赛后，这里会保留完整发言和选票。' }}</p>
         <button type="button" class="ghost-button" @click="goPage('register')">去登记</button>
       </div>
 
-      <section v-if="roundsNewestFirst.length" class="record-assets">
+      <section v-if="runMode !== 'review' && roundsNewestFirst.length" class="record-assets">
         <div class="record-assets__head">
           <div class="segmented segmented--split" role="group" aria-label="主张台账视图">
             <button type="button" :class="{ active: claimView === 'table' }"
@@ -906,6 +1182,14 @@
           <span>检索档案</span>
           <input v-model.trim="archiveSearch" type="search" placeholder="命题、模型或胜者">
         </label>
+        <div class="archive-mode-filter" role="group" aria-label="按模式筛选">
+          <button type="button" :class="{ active: archiveScope === 'all' }"
+            @click="archiveScope = 'all'">全部模式</button>
+          <button type="button" :class="{ active: archiveScope === 'review' }"
+            @click="archiveScope = 'review'">方案评审</button>
+          <button type="button" :class="{ active: archiveScope === 'debate' }"
+            @click="archiveScope = 'debate'">淘汰辩论</button>
+        </div>
       </section>
 
       <div v-if="archiveMode === 'compare'" class="compare-view">
@@ -924,7 +1208,9 @@
                   :disabled="compareIds.length >= 3 && !compareIds.includes(item.id)">
                 <span>{{ (item.started_at || '').slice(5, 16) || '—' }}</span>
                 <b>{{ item.proposition }}</b>
-                <em>{{ item.participants }} 人 {{ item.round_count ?? '—' }} 轮</em>
+                <em>{{ item.mode === 'review'
+                  ? `${item.answer_count ?? item.participants} 份方案`
+                  : `${item.participants} 人 ${item.round_count ?? '—'} 轮` }}</em>
                 <i>{{ durationText(item.duration) }}</i>
                 <u>{{ item.winner || '—' }}</u>
               </label>
@@ -937,18 +1223,22 @@
             <template v-for="item in history.filter((h) => h.id === id)" :key="'cell-' + id">
               <header>
                 <b>{{ (item.started_at || '').slice(5, 16) || '—' }}</b>
-                <span>{{ item.participants }} 人 · {{ item.round_count ?? '—' }} 轮</span>
+                <span class="record-mode-badge">{{ modeLabel(item.mode) }}</span>
+                <span>{{ item.mode === 'review'
+                  ? `${item.answer_count ?? item.participants} 份方案 · 单裁判`
+                  : `${item.participants} 人 · ${item.round_count ?? '—'} 轮` }}</span>
                 <em>{{ durationText(item.duration) }}</em>
               </header>
               <p class="compare-col__topic">{{ item.proposition }}</p>
-              <p class="compare-col__winner">胜者 {{ item.winner || '—' }}</p>
+              <p class="compare-col__winner">{{ item.mode === 'review' ? '推荐' : '胜者' }}
+                {{ item.winner || item.recommended_agent || '—' }}</p>
               <button type="button" class="text-action" @click="loadHistoryRun(id)">查看这场</button>
             </template>
           </div>
         </div>
 
-        <section v-if="modelProfiles.length" class="model-profile">
-          <h3>模型画像（全部历史）</h3>
+        <section v-if="modelProfiles.length && archiveScope !== 'all'" class="model-profile">
+          <h3>模型画像（{{ archiveScope === 'review' ? '方案评审' : '淘汰辩论' }}）</h3>
           <table>
             <thead>
               <tr>
@@ -980,6 +1270,7 @@
             <span class="archive-status" :class="item.status">
               <i aria-hidden="true"></i>{{ historyStatus(item) }}
             </span>
+            <span class="record-mode-badge">{{ modeLabel(item.mode) }}</span>
             <time>{{ (item.started_at || '').slice(5, 16) || '—' }}</time>
             <button type="button" class="archive-compare-toggle"
               :class="{ active: compareIds.includes(item.id) }"
@@ -1005,16 +1296,17 @@
 
           <footer class="archive-card__foot">
             <div class="archive-card__winner">
-              <span>胜者</span>
-              <b v-if="item.winner">
-                <robot-avatar :name="item.winner" :spec="archiveSpec(item, item.winner)"
-                  :color="agentColor(item.winner)" :size="24"></robot-avatar>
-                {{ item.winner }}
+              <span>{{ item.mode === 'review' ? '推荐' : '胜者' }}</span>
+              <b v-if="item.winner || item.recommended_agent">
+                <robot-avatar :name="item.winner || item.recommended_agent"
+                  :spec="archiveSpec(item, item.winner || item.recommended_agent)"
+                  :color="agentColor(item.winner || item.recommended_agent)" :size="24"></robot-avatar>
+                {{ item.winner || item.recommended_agent }}
               </b>
               <b v-else>未决</b>
             </div>
             <div class="archive-card__meta">
-              <span>{{ item.round_count ?? '—' }} 轮</span>
+              <span>{{ item.mode === 'review' ? `${item.answer_count ?? item.participants} 份方案` : `${item.round_count ?? '—'} 轮` }}</span>
               <span>{{ durationText(item.duration) }}</span>
               <span>{{ item.participants }} 模型</span>
             </div>

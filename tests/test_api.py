@@ -47,6 +47,32 @@ class RunPresetTest(unittest.TestCase):
         self.assertEqual(preset["background"], "context")
         self.assertEqual(preset["constraints"], ["constraint"])
         self.assertEqual(preset["criteria"], ["criterion"])
+        self.assertEqual(preset["mode"], "debate")
+
+    def test_review_preset_restores_judge_and_perspective_switch(self) -> None:
+        transcript = {
+            "mode": "review",
+            "proposition": "test",
+            "judge": {"name": "Judge", "model": "judge-model"},
+            "setup": {
+                "mode": "review",
+                "model_ids": [2, 3],
+                "judge_model_id": 4,
+                "diversify": False,
+            },
+            "participants": [
+                {"name": "A", "config_id": 2},
+                {"name": "B", "config_id": 3},
+            ],
+        }
+        configs = [{"id": 2}, {"id": 3}, {"id": 4}]
+
+        preset = build_run_preset(transcript, configs)
+
+        self.assertEqual(preset["mode"], "review")
+        self.assertEqual(preset["judge_model_id"], 4)
+        self.assertFalse(preset["diversify"])
+        self.assertTrue(preset["resolved"])
 
     def test_transcript_without_setup_is_rejected(self) -> None:
         transcript = {
