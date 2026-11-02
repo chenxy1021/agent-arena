@@ -1,4 +1,4 @@
-"""agent_arena — 把本地所有 agent CLI 拉进同一场辩论，投票淘汰到只剩一个。"""
+"""agent_arena — 把多个大模型拉进同一场辩论，投票淘汰到只剩一个。"""
 
 from .moderator import Arena, ArenaConfig, ArenaResult, run_arena
 

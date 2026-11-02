@@ -7,12 +7,11 @@ import random
 import re
 import socket
 import time
-from types import SimpleNamespace
 from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .adapters import CallResult
+from .agent import CallResult
 
 OutputCallback = Callable[[str], None]
 
@@ -116,7 +115,6 @@ class ApiModelAgent:
         self.system_prompt = system_prompt.strip()
         self.temperature = temperature
         self.persona = (persona or "").strip()
-        self.spec = SimpleNamespace(key=name, label=model, note="OpenAI-compatible API")
         self.version = model
         self.path = completions_url(base_url)
 
@@ -130,7 +128,6 @@ class ApiModelAgent:
     def ask(
         self,
         prompt: str,
-        workdir=None,
         timeout: float = 240,
         retries: int = 1,
         on_output: OutputCallback | None = None,

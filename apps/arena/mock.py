@@ -1,7 +1,4 @@
-"""Mock agent：不调外部 CLI，用本地假数据跑通整场赛制。
-
-用途：离线验证流程（--mock）、演示、以及在没有额度时做回归测试。
-"""
+"""Deterministic local agent used by regression tests."""
 
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
-from .adapters import CallResult
+from .agent import CallResult
 
 _ANGLE = [
     "从成本结构看，真正的瓶颈不在技术而在单位经济模型",
@@ -61,7 +58,7 @@ _JUDGEMENT = [
 
 @dataclass
 class MockAgent:
-    """与 CliAgent 同构的假 agent。"""
+    """Deterministic fake agent with the same ask() contract as API models."""
 
     name: str
     seed: int = 0
@@ -69,7 +66,6 @@ class MockAgent:
 
     def __post_init__(self) -> None:
         self.rng = random.Random(f"{self.seed}-{self.name}")
-        self.spec = type("Spec", (), {"key": "mock", "label": "Mock", "note": ""})()
         self.version = "mock"
         self.path = "builtin://mock"
         self.calls = 0
@@ -84,7 +80,6 @@ class MockAgent:
     def ask(
         self,
         prompt: str,
-        workdir=None,
         timeout: float = 0,
         retries: int = 0,
         on_output=None,

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from apps.arena.adapters import CallResult
+from apps.arena.agent import CallResult
 from apps.arena.mock import MockAgent
 from apps.arena.events import RecordingSink
 from apps.arena.moderator import (
@@ -275,6 +275,15 @@ class BallotParsingTest(unittest.TestCase):
 
         self.assertEqual(target, "模型B")
         self.assertEqual(reason, "缺少证据")
+        self.assertEqual(scores, {})
+
+    def test_rejects_legacy_plain_text_vote(self) -> None:
+        target, reason, scores = parse_ballot(
+            'vote: "模型B"', ["模型A", "模型B"], "模型A"
+        )
+
+        self.assertIsNone(target)
+        self.assertEqual(reason, "")
         self.assertEqual(scores, {})
 
     def test_reason_is_kept_up_to_200_chars(self) -> None:

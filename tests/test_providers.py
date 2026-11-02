@@ -3,7 +3,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from apps.arena.adapters import CallResult
+from apps.arena.agent import CallResult
 from apps.arena.providers import ApiModelAgent, _read_stream, completions_url, suggest_display_name
 
 

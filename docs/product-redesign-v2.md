@@ -74,7 +74,7 @@ README 说这个产品用于"从分歧中发现被忽略的风险、证据和假
 
 ### 改动 3 · 投票从单维改成多维评分
 
-**问题**：`prompts.py::build_vote_prompt` 只要求输出 `{"vote": "...", "reason": "..."}`。单维、无强度、无分数。而且 `moderator.py::parse_vote` 里 `reason` 被 `[:40]` **硬截断**——理由是"为自己的判断负责"的核心证据，40 字砍掉的恰恰是最有价值的部分（战报里所有理由都是半句话）。
+**问题**：`prompts.py::build_vote_prompt` 最初只要求输出 `{"vote": "...", "reason": "..."}`。单维、无强度、无分数，旧解析器还会把 `reason` 截断——理由是"为自己的判断负责"的核心证据，半句话没有复盘价值。
 
 **改法**：
 - **输出 schema 升级**：
@@ -88,7 +88,7 @@ README 说这个产品用于"从分歧中发现被忽略的风险、证据和假
   四个维度对应现有投票标准里的四条（推进命题 / 论据成立 / 是否空泛 / 是否有增量），只是从定性变成定量。
 - **理由不截断**，改为存 200 字上限 + 保留完整文本在战报。
 - **淘汰规则**：仍按 `vote` 决定谁出局（保持赛制可读性），但**分数矩阵作为独立数据落库**，用于跨场比较模型强弱。
-- **兼容**：`parse_ballot()` 先试新 schema，失败再回退旧的 `parse_vote()`，老战报不受影响。
+- **当前 schema**：`parse_ballot()` 只接受当前 JSON ballot；不兼容旧版纯文本投票。
 
 **预期收益**：这是"比较不同模型在同一问题上的真实表现"这句话第一次有了数据支撑。档案页的模型画像由此而来。
 
@@ -338,7 +338,7 @@ Markdown 战报（`report.py`）同步加"主张存活表"和"票权分布"两�
 |---|---|
 | 1 并行发言 | `apps/arena/moderator.py::Arena.run()`、`ArenaConfig`、前端 `app.js` 事件处理 |
 | 2 点评收窄 | `apps/arena/prompts.py::build_speech_prompt`、`moderator.py::_ledger`、`parse_claims` |
-| 3 多维评分 | `prompts.py::build_vote_prompt`、`moderator.py::parse_vote` → `parse_ballot`、`RoundRecord` |
+| 3 多维评分 | `prompts.py::build_vote_prompt`、`moderator.py::parse_ballot`、`RoundRecord` |
 | 4 评审降权 | `moderator.py::_collect_votes` / `_resolve_vote`、`ArenaConfig` |
 | 5 去随机 | `moderator.py::_resolve_vote`（删 `random.choice`）、`_decide` |
 | 6 主张台账 | `moderator.py`（新增 `_ledger` / `claims`）、`report.py::_md`、`ArenaResult` |

@@ -22,15 +22,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import prompts, report
-from .adapters import CallResult
+from .agent import CallResult
 from .events import EventSink, NullSink
 
 TAG_VIEW_RE = re.compile(r"【观点】\s*([\s\S]*)")
 TAG_COMMENT_RE = re.compile(r"【点评】\s*([\s\S]*?)(?=【观点】|$)")
 TAG_STANCE_RE = re.compile(r"【立场】\s*([+-]?\d{1,3})")
 TAG_CLAIM_RE = re.compile(r"【主张】\s*([\s\S]*?)(?=\n【|$)")
-VOTE_JSON_RE = re.compile(r"\{[^{}]*[\"']?vote[\"']?\s*:\s*[^{}]*\}", re.S)
-VOTE_LOOSE_RE = re.compile(r"vote[\"'\s]*[:：]\s*[\"“']([^\"”'\n,}]+)")
 
 VOTE_MODES = ("eliminate", "support")
 SPEECH_MODES = ("parallel_buffered", "sequential_live")
@@ -127,10 +125,6 @@ class ArenaResult:
 # ----------------------------------------------------------------------
 # 工具函数
 # ----------------------------------------------------------------------
-def _safe(name: str) -> str:
-    return re.sub(r"[^\w.\-]+", "_", name)
-
-
 def extract_view(text: str) -> str:
     m = TAG_VIEW_RE.search(text)
     if m:
@@ -251,8 +245,8 @@ def _iter_json_objects(text: str):
                     yield obj
 
 
-def parse_vote(text: str, valid: Sequence[str], voter: str) -> tuple[str | None, str]:
-    """解析投票目标与理由，允许模型省略评分。"""
+def _ballot_target(text: str, valid: Sequence[str], voter: str) -> tuple[str | None, str]:
+    """解析当前 JSON ballot 的投票目标与理由。"""
     pool = [v for v in valid if v != voter]
     if not pool:
         return None, ""
@@ -268,10 +262,6 @@ def parse_vote(text: str, valid: Sequence[str], voter: str) -> tuple[str | None,
     if raw_obj:
         target = _clean_candidate(str(raw_obj.get("vote") or raw_obj.get("target") or ""))
         reason = str(raw_obj.get("reason") or "").strip()[:MAX_REASON_CHARS]
-    else:
-        m = VOTE_LOOSE_RE.search(text or "")
-        if m:
-            target = _clean_candidate(m.group(1))
 
     if not target:
         return None, ""
@@ -293,11 +283,11 @@ def parse_vote(text: str, valid: Sequence[str], voter: str) -> tuple[str | None,
 def parse_ballot(
     text: str, valid: Sequence[str], voter: str
 ) -> tuple[str | None, str, dict[str, dict[str, float]]]:
-    """新版权票解析：多维评分 + 票 + 理由。失败时回退旧格式。
+    """当前版 JSON ballot：多维评分 + 票 + 理由。
 
     返回 (target, reason, scores)。scores = {被投模型: {维度: 分数}}
     """
-    target, reason = parse_vote(text, valid, voter)
+    target, reason = _ballot_target(text, valid, voter)
     scores: dict[str, dict[str, float]] = {}
 
     for obj in _iter_json_objects(text or ""):
@@ -382,22 +372,13 @@ class Arena:
         # 外部取消信号（services.Manager 注入），在轮次边界检查。
         self.cancel_hook: Any = None
 
-    # -- 路径 ----------------------------------------------------------
-    def _workdir(self, agent: Any) -> Path:
-        # 必须是绝对路径：CLI 内部再做相对路径拼接时会被二次解析
-        d = self.run_dir / "ws" / _safe(agent.name)
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
     def _agent_dict(self, agent: Any) -> dict[str, Any]:
-        spec = getattr(agent, "spec", None)
         return {
             "name": agent.name,
             "label": getattr(agent, "label", ""),
             "model": str(getattr(agent, "model", getattr(agent, "label", "")) or ""),
             "config_id": int(getattr(agent, "config_id", 0) or 0),
             "path": str(getattr(agent, "path", "")),
-            "discovered": bool(getattr(spec, "discovered", False)),
             "persona": str(getattr(agent, "persona", "") or ""),
         }
 
@@ -810,10 +791,9 @@ class Arena:
             future = pool.submit(
                 agent.ask,
                 prompt,
-                self._workdir(agent),
-                self.cfg.timeout,
-                self.cfg.retries,
-                sink,
+                timeout=self.cfg.timeout,
+                retries=self.cfg.retries,
+                on_output=sink,
             )
             started = time.monotonic()
             while not future.done():
@@ -903,9 +883,8 @@ class Arena:
             )
             res = agent.ask(
                 prompt,
-                self._workdir(agent),
-                min(self.cfg.timeout, 90),
-                0,
+                timeout=min(self.cfg.timeout, 90),
+                retries=0,
             )
             if res.error:
                 last_err = res.error
