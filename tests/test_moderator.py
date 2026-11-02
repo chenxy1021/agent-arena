@@ -410,9 +410,12 @@ class ParallelSpeechTest(unittest.TestCase):
             ).run()
 
         data = result.to_dict()
-        self.assertEqual(data["schema_version"], 2)
+        self.assertEqual(data["schema_version"], 3)
         self.assertTrue(data["claims"])
         self.assertIn("calls", data["budget"])
+        self.assertEqual(data["setup"]["vote_mode"], "eliminate")
+        self.assertEqual(data["setup"]["speech_mode"], "parallel_buffered")
+        self.assertEqual(len(data["setup"]["model_ids"]), 2)
         self.assertIn("weight_breakdown", data["rounds"][1])
 
 

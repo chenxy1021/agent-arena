@@ -555,13 +555,19 @@
           <h1>{{ proposition || '比赛记录' }}</h1>
           <p>每一轮发言、每一张选票、每一次出局，都按原样留着。</p>
         </div>
-        <div class="chips">
-          <span class="chips__label">按人</span>
-          <button type="button" class="chip" :class="{ active: !recordAgentFilter }"
-            @click="recordAgentFilter = ''">全部</button>
-          <button v-for="name in recordAgents" :key="`filter-${name}`" type="button"
-            class="chip" :class="{ active: recordAgentFilter === name }"
-            @click="selectRecordAgent(name)">{{ name }}</button>
+        <div class="record-head-tools">
+          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo' && !running"
+            type="button" class="ghost-button" @click="reuseHistoryRun(viewingHistoryId)">
+            再赛一场
+          </button>
+          <div class="chips">
+            <span class="chips__label">按人</span>
+            <button type="button" class="chip" :class="{ active: !recordAgentFilter }"
+              @click="recordAgentFilter = ''">全部</button>
+            <button v-for="name in recordAgents" :key="`filter-${name}`" type="button"
+              class="chip" :class="{ active: recordAgentFilter === name }"
+              @click="selectRecordAgent(name)">{{ name }}</button>
+          </div>
         </div>
       </header>
 
@@ -811,7 +817,7 @@
         <div class="ledger__head">
           <span>时间</span><span>命题</span><span>参赛</span><span>轮次</span><span>时长</span><span>胜者</span><span>操作</span>
         </div>
-        <button v-for="item in history" :key="item.id" type="button" class="ledger__row"
+        <div v-for="item in history" :key="item.id" class="ledger__row"
           :class="{ current: item.id === viewingHistoryId }" @click="loadHistoryRun(item.id)">
           <span class="ledger__time">
             <i class="ledger__status" :class="item.status" aria-hidden="true"></i>
@@ -830,8 +836,13 @@
             </template>
             <template v-else>—</template>
           </span>
-          <span class="ledger__go">查看 <i aria-hidden="true">›</i></span>
-        </button>
+          <span class="ledger__go">
+            <button type="button" class="row-action" @click.stop="reuseHistoryRun(item.id)">再赛</button>
+            <button type="button" class="text-action ledger__open" @click.stop="loadHistoryRun(item.id)">
+              查看 <i aria-hidden="true">›</i>
+            </button>
+          </span>
+        </div>
       </div>
 
       <div v-else-if="!historyLoading && archiveMode === 'ledger'" class="ledger-empty">

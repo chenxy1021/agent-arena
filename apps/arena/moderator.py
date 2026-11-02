@@ -107,17 +107,18 @@ class ArenaResult:
     started_at: str
     duration: float
     vote_mode: str
-    participants: list[dict[str, str]]
+    participants: list[dict[str, Any]]
     rounds: list[RoundRecord]
     eliminated: list[dict[str, Any]]
     winner: str | None
     final_answer: str
     claims: list[dict[str, Any]] = field(default_factory=list)
+    setup: dict[str, Any] = field(default_factory=dict)
     budget: dict[str, Any] = field(default_factory=dict)
     speech_mode: str = "parallel_buffered"
     converged: bool = False
     stop_reason: str = ""
-    schema_version: int = 2
+    schema_version: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -388,11 +389,13 @@ class Arena:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _agent_dict(self, agent: Any) -> dict[str, str]:
+    def _agent_dict(self, agent: Any) -> dict[str, Any]:
         spec = getattr(agent, "spec", None)
         return {
             "name": agent.name,
             "label": getattr(agent, "label", ""),
+            "model": str(getattr(agent, "model", getattr(agent, "label", "")) or ""),
+            "config_id": int(getattr(agent, "config_id", 0) or 0),
             "path": str(getattr(agent, "path", "")),
             "discovered": bool(getattr(spec, "discovered", False)),
             "persona": str(getattr(agent, "persona", "") or ""),
@@ -595,6 +598,18 @@ class Arena:
             winner=winner,
             final_answer=final_text,
             claims=self._claims,
+            setup={
+                "model_ids": [
+                    int(getattr(agent, "config_id", 0) or 0)
+                    for agent in self.agents
+                ],
+                "vote_mode": cfg.vote_mode,
+                "speech_mode": cfg.speech_mode,
+                "timeout": cfg.timeout,
+                "background": cfg.background,
+                "constraints": list(cfg.constraints),
+                "criteria": list(cfg.criteria),
+            },
             budget=budget,
             speech_mode=cfg.speech_mode,
             converged=converged,

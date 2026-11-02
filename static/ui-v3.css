@@ -781,6 +781,17 @@ select:focus-visible,
   padding-top: 24px;
 }
 
+.record-head-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.record-head-tools > .ghost-button {
+  min-height: 34px;
+}
+
 .round-track {
   top: calc(var(--topbar-height) + 18px);
   padding: 18px 16px 18px 24px;
@@ -934,6 +945,26 @@ select:focus-visible,
 .ledger__row.current {
   background: rgba(255, 79, 121, .05);
   box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.ledger__go {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.ledger__go .row-action {
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.ledger__go .ledger__open {
+  min-height: 28px;
+  padding: 3px 4px;
 }
 
 .ledger__stamp {
@@ -1162,6 +1193,10 @@ select:focus-visible,
 
   .record-layout {
     grid-template-columns: 1fr;
+  }
+
+  .record-head-tools {
+    align-items: flex-start;
   }
 
   .round-track,

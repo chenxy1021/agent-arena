@@ -220,6 +220,72 @@ def _read_transcript(meta: dict[str, Any]) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def build_run_preset(
+    transcript: dict[str, Any], configs: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Resolve a historical match into a safe setup draft for a new run."""
+    setup = transcript.get("setup") or {}
+    participants = transcript.get("participants") or []
+    by_id = {int(item["id"]): item for item in configs}
+    by_name_model: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    by_model: dict[str, list[dict[str, Any]]] = {}
+    for item in configs:
+        name = str(item.get("name") or "")
+        model = str(item.get("model") or "")
+        by_name_model.setdefault((name, model), []).append(item)
+        by_name.setdefault(name, []).append(item)
+        by_model.setdefault(model, []).append(item)
+
+    def unique(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        return candidates[0] if len(candidates) == 1 else None
+
+    model_ids: list[int] = []
+    matched_names: list[str] = []
+    missing_models: list[dict[str, str]] = []
+    for participant in participants:
+        name = str(participant.get("name") or "")
+        model = str(participant.get("model") or participant.get("label") or "")
+        config_id = int(participant.get("config_id") or 0)
+        config = by_id.get(config_id)
+        if not config:
+            config = unique(by_name_model.get((name, model), []))
+        if not config:
+            config = unique(by_name.get(name, []))
+        if not config:
+            config = unique(by_model.get(model, []))
+        if not config:
+            missing_models.append({"name": name or "未命名模型", "model": model})
+            continue
+        resolved_id = int(config["id"])
+        if resolved_id not in model_ids:
+            model_ids.append(resolved_id)
+        matched_names.append(str(config.get("name") or name))
+
+    warnings: list[str] = []
+    if not setup:
+        warnings.append("旧战报未保存完整赛制；已恢复命题、规则和可识别模型。")
+
+    return {
+        "proposition": str(transcript.get("proposition") or ""),
+        "vote_mode": str(setup.get("vote_mode") or transcript.get("vote_mode") or "eliminate"),
+        "speech_mode": str(
+            setup.get("speech_mode")
+            or transcript.get("speech_mode")
+            or "parallel_buffered"
+        ),
+        "timeout": float(setup.get("timeout") or 240),
+        "background": str(setup.get("background") or ""),
+        "constraints": list(setup.get("constraints") or []),
+        "criteria": list(setup.get("criteria") or []),
+        "model_ids": model_ids,
+        "matched_models": matched_names,
+        "missing_models": missing_models,
+        "resolved": len(model_ids) >= 2 and not missing_models,
+        "warnings": warnings,
+    }
+
+
 @router.get("/history/{run_id}")
 def history_run(run_id: str) -> dict[str, Any]:
     meta = database.get_run(run_id)
@@ -227,3 +293,14 @@ def history_run(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="history not found")
     transcript = _read_transcript(meta)
     return {"meta": meta, "transcript": transcript}
+
+
+@router.get("/history/{run_id}/preset")
+def history_preset(run_id: str) -> dict[str, Any]:
+    meta = database.get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="history not found")
+    transcript = _read_transcript(meta)
+    if not transcript:
+        raise HTTPException(status_code=404, detail="transcript not found")
+    return build_run_preset(transcript, database.list_models())

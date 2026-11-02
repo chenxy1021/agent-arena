@@ -2873,6 +2873,58 @@ Vue.createApp({
       }
     },
 
+    async reuseHistoryRun(id) {
+      if (!id || id === 'demo') {
+        this.hint = '演示档案没有可复用的真实模型配置';
+        this.hintError = true;
+        return;
+      }
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(id)}/preset`);
+        const preset = await res.json();
+        if (!res.ok) throw new Error(cleanError(preset));
+
+        await this.loadModels();
+        const selected = new Set((preset.model_ids || []).map(Number));
+        this.models = this.models.map((model) => ({
+          ...model,
+          checked: selected.has(Number(model.id)),
+        }));
+
+        this.resetArena();
+        this.proposition = preset.proposition || '';
+        this.mode = preset.vote_mode || 'eliminate';
+        this.speechMode = preset.speech_mode || 'parallel_buffered';
+        this.timeout = Number(preset.timeout) || 240;
+        this.background = preset.background || '';
+        this.constraints = [...(preset.constraints || [])];
+        this.criteria = [...(preset.criteria || [])];
+        this.propOpen.context = Boolean(this.background || this.constraints.length);
+        this.propOpen.criteria = Boolean(this.criteria.length);
+
+        const missing = preset.missing_models || [];
+        if (missing.length || !preset.resolved) {
+          const names = missing.map((item) => item.name).join('、') || '部分参赛模型';
+          this.hint = `预设已载入，但 ${names} 已删除、改名或无法唯一匹配，请重新选择后再开赛。`;
+          this.hintError = true;
+          this.hintOk = false;
+        } else {
+          this.hint = `已复用这场预设：${preset.proposition}。确认阵容后开赛。`;
+          this.hintError = false;
+          this.hintOk = true;
+        }
+        if (preset.warnings?.length) {
+          this.hint = `${this.hint} ${preset.warnings.join(' ')}`;
+          this.hintError = this.hintError || !preset.resolved;
+        }
+        this.goPage('register');
+      } catch (err) {
+        this.hint = `复用预设失败：${err.message}`;
+        this.hintError = true;
+        this.hintOk = false;
+      }
+    },
+
     async loadHistoryRun(id, options = {}) {
       try {
         const res = await fetch(`/api/history/${encodeURIComponent(id)}`);
