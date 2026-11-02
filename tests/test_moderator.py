@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from apps.arena.agent import CallResult
@@ -12,6 +13,7 @@ from apps.arena.moderator import (
     RoundRecord,
     Speech,
     Vote,
+    assign_names,
     _prior_speeches_for,
     extract_critiques_for,
     extract_stance,
@@ -38,6 +40,28 @@ class StanceTest(unittest.TestCase):
     def test_stance_marker_is_stripped_from_view_text(self) -> None:
         view = extract_view("【立场】+40\n【观点】增长可以复制")
         self.assertEqual(view, "增长可以复制")
+
+
+class AgentNamingTest(unittest.TestCase):
+    def test_api_model_names_are_preserved(self) -> None:
+        agents = [
+            SimpleNamespace(name="GPT-5", label="gpt-5"),
+            SimpleNamespace(name="Claude", label="claude-opus-4"),
+        ]
+
+        assign_names(agents)
+
+        self.assertEqual([agent.name for agent in agents], ["GPT-5", "Claude"])
+
+    def test_duplicate_names_are_numbered(self) -> None:
+        agents = [
+            SimpleNamespace(name="GPT-5", label="gpt-5"),
+            SimpleNamespace(name="GPT-5", label="gpt-5-mini"),
+        ]
+
+        assign_names(agents)
+
+        self.assertEqual([agent.name for agent in agents], ["GPT-5#1", "GPT-5#2"])
 
 
 class DecideVoteTest(unittest.TestCase):

@@ -432,6 +432,8 @@
           <small>{{ liveLabel }}</small>
         </header>
 
+        <div ref="liveScroll" class="live-console__scroll" tabindex="0"
+          aria-label="实时输出，可上下滚动" @scroll.passive="handleLiveScroll">
         <section v-if="tiebreakActive" class="tiebreak-panel" role="status" aria-live="assertive">
           <span class="tiebreak-panel__kicker">TIEBREAK / 加赛进行中</span>
           <strong>第 {{ tiebreakState.attempt }} 次加赛 · {{ tiebreakState.agents.join(' / ') }}</strong>
@@ -501,7 +503,8 @@
           <p class="parallel-board__foot">所有席位同屏展开；单卡完成不会再遮住其他人的观点。</p>
         </section>
 
-        <div class="projection" v-if="(currentPaper || running || replaying) && !parallelVisible"
+        <div class="projection"
+          v-if="currentPaper?.final || ((currentPaper || running || replaying) && !parallelVisible)"
           :class="{ final: currentPaper?.final, waiting: !currentPaper?.text, status: !currentPaper, done: speechArchived, error: panelError }"
           ref="projectionPanel"
           :style="{ '--team-color': agentColor(currentPaper ? currentPaper.agent : activeAgent) }">
@@ -572,6 +575,11 @@
           <strong>等待下一场比赛</strong>
           <p>开赛后，模型发言、思考进度和加赛状态都会在这里实时出现。</p>
         </div>
+        </div>
+        <button v-if="!liveFollow && running" type="button" class="live-console__follow"
+          @click="followLiveOutput">
+          跟到最新 <span aria-hidden="true">↓</span>
+        </button>
       </aside>
       </div>
 
@@ -603,6 +611,27 @@
         </div>
       </header>
 
+      <div v-if="roundsNewestFirst.length" class="record-overview">
+        <div class="record-overview__identity">
+          <span>Decision dossier</span>
+          <strong>{{ matchOutcome?.label || '已归档' }}</strong>
+          <p>{{ matchOutcome?.detail || '完整保留发言、投票与最终裁决。' }}</p>
+        </div>
+        <div class="record-stat">
+          <span>轮次</span><b>{{ currentRound }}</b><small>rounds</small>
+        </div>
+        <div class="record-stat">
+          <span>参赛</span><b>{{ participants.length }}</b><small>models</small>
+        </div>
+        <div class="record-stat">
+          <span>用时</span><b>{{ durationText(elapsed) }}</b><small>wall clock</small>
+        </div>
+        <div class="record-stat record-stat--winner">
+          <span>最终裁决</span><b>{{ winnerName || '未决' }}</b>
+          <small>{{ winnerName ? agentModel(winnerName) : 'no winner' }}</small>
+        </div>
+      </div>
+
       <div v-if="roundsNewestFirst.length" class="record-layout">
         <aside class="round-track" aria-label="轮次">
           <button type="button" class="round-track__item" :class="{ active: !recordRoundFilter }"
@@ -630,11 +659,18 @@
           </div>
 
           <article v-if="final" class="record-final">
-            <span>FINAL DECISION · 最终总结</span>
-            <h2>{{ final.agent }}</h2>
-            <p v-if="agentModel(final.agent)" class="record-final__model">
-              {{ agentModel(final.agent) }}
-            </p>
+            <header class="record-final__head">
+              <robot-avatar :name="final.agent" :spec="robotSpec(final.agent)"
+                :color="agentColor(final.agent)" state="winner" :size="54"></robot-avatar>
+              <div>
+                <span>FINAL DECISION · 最终总结</span>
+                <h2>{{ final.agent }}</h2>
+                <p v-if="agentModel(final.agent)" class="record-final__model">
+                  {{ agentModel(final.agent) }}
+                </p>
+              </div>
+              <em>胜出</em>
+            </header>
             <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
               class="speech-block__para" :class="{ gap: i > 0 }">
               <mark v-if="block.kind !== 'plain'">{{ block.label }}</mark>{{ block.text }}
@@ -790,6 +826,22 @@
         </div>
       </header>
 
+      <section class="archive-overview" aria-label="档案概览">
+        <div class="archive-metric">
+          <span>总场次</span><b>{{ archiveStats.total }}</b><small>sessions</small>
+        </div>
+        <div class="archive-metric">
+          <span>完成</span><b>{{ archiveStats.completed }}</b><small>decided</small>
+        </div>
+        <div class="archive-metric">
+          <span>模型</span><b>{{ archiveStats.models }}</b><small>unique</small>
+        </div>
+        <label class="archive-search">
+          <span>检索档案</span>
+          <input v-model.trim="archiveSearch" type="search" placeholder="命题、模型或胜者">
+        </label>
+      </section>
+
       <div v-if="archiveMode === 'compare'" class="compare-view">
         <div class="compare-picker">
           <p class="compare-picker__hint">
@@ -850,43 +902,77 @@
         </section>
       </div>
 
-      <div v-if="history.length && archiveMode === 'ledger'" class="ledger">
-        <div class="ledger__head">
-          <span>时间</span><span>命题</span><span>参赛</span><span>轮次</span><span>时长</span><span>胜者</span><span>操作</span>
-        </div>
-        <div v-for="item in history" :key="item.id" class="ledger__row"
-          :class="{ current: item.id === viewingHistoryId }" @click="loadHistoryRun(item.id)">
-          <span class="ledger__time">
-            <i class="ledger__status" :class="item.status" aria-hidden="true"></i>
-            <span class="ledger__stamp">{{ historyStatus(item) }}</span>
-            {{ (item.started_at || '').slice(5, 16) || '—' }}
-          </span>
-          <span class="ledger__topic">{{ item.proposition }}</span>
-          <span class="ledger__num">{{ item.participants }}</span>
-          <span class="ledger__num">{{ item.round_count ?? '—' }}</span>
-          <span class="ledger__num">{{ durationText(item.duration) }}</span>
-          <span class="ledger__winner">
-            <template v-if="item.winner">
-              <robot-avatar :name="item.winner" :spec="archiveSpec(item, item.winner)"
-                :color="agentColor(item.winner)" :size="20"></robot-avatar>
-              {{ item.winner }}
-            </template>
-            <template v-else>—</template>
-          </span>
-          <span class="ledger__go">
-            <button type="button" class="row-action" :disabled="!item.reusable"
-              :title="item.reusable ? '复用这场预设' : '比赛尚未归档，暂不能再赛'"
-              @click.stop="reuseHistoryRun(item.id)">再赛</button>
-            <button type="button" class="text-action ledger__open" @click.stop="loadHistoryRun(item.id)">
-              查看 <i aria-hidden="true">›</i>
-            </button>
-          </span>
-        </div>
+      <div v-if="historyLoading && archiveMode === 'ledger'" class="archive-loading">
+        <i aria-hidden="true"></i>
+        正在读取本地档案…
       </div>
 
-      <div v-else-if="!historyLoading && archiveMode === 'ledger'" class="ledger-empty">
-        <p>还没有存下任何一场争论。登记两个模型，写下一个命题，就能开始第一场。</p>
-        <button type="button" class="ghost-button" @click="goPage('register')">去登记</button>
+      <div v-else-if="filteredHistory.length && archiveMode === 'ledger'" class="archive-grid">
+        <article v-for="item in filteredHistory" :key="item.id" class="archive-card"
+          :class="{ current: item.id === viewingHistoryId }">
+          <header class="archive-card__head">
+            <span class="archive-status" :class="item.status">
+              <i aria-hidden="true"></i>{{ historyStatus(item) }}
+            </span>
+            <time>{{ (item.started_at || '').slice(5, 16) || '—' }}</time>
+            <button type="button" class="archive-compare-toggle"
+              :class="{ active: compareIds.includes(item.id) }"
+              :aria-pressed="compareIds.includes(item.id)"
+              @click.stop="toggleArchiveCompare(item.id)">
+              {{ compareIds.includes(item.id) ? '已选对比' : '加入对比' }}
+            </button>
+          </header>
+
+          <h2>{{ item.proposition }}</h2>
+
+          <div class="archive-lineup" aria-label="参赛模型">
+            <span v-for="name in (item.participant_names || []).slice(0, 4)" :key="`${item.id}-${name}`"
+              class="archive-lineup__item" :style="{ '--team-color': agentColor(name) }">
+              <robot-avatar :name="name" :spec="archiveSpec(item, name)"
+                :color="agentColor(name)" :size="20"></robot-avatar>
+              {{ name }}
+            </span>
+            <span v-if="(item.participant_names || []).length > 4" class="archive-lineup__more">
+              +{{ item.participant_names.length - 4 }}
+            </span>
+          </div>
+
+          <footer class="archive-card__foot">
+            <div class="archive-card__winner">
+              <span>胜者</span>
+              <b v-if="item.winner">
+                <robot-avatar :name="item.winner" :spec="archiveSpec(item, item.winner)"
+                  :color="agentColor(item.winner)" :size="24"></robot-avatar>
+                {{ item.winner }}
+              </b>
+              <b v-else>未决</b>
+            </div>
+            <div class="archive-card__meta">
+              <span>{{ item.round_count ?? '—' }} 轮</span>
+              <span>{{ durationText(item.duration) }}</span>
+              <span>{{ item.participants }} 模型</span>
+            </div>
+            <div class="archive-card__actions">
+              <button type="button" class="row-action" :disabled="!item.reusable"
+                :title="item.reusable ? '复用这场预设' : '比赛尚未归档，暂不能再赛'"
+                @click.stop="reuseHistoryRun(item.id)">再赛</button>
+              <button type="button" class="text-action" @click.stop="loadHistoryRun(item.id)">
+                查看记录 <i aria-hidden="true">›</i>
+              </button>
+            </div>
+          </footer>
+        </article>
+      </div>
+
+      <div v-else-if="archiveMode === 'ledger'" class="ledger-empty">
+        <strong>{{ history.length ? '没有匹配的档案' : '还没有比赛档案' }}</strong>
+        <p>
+          {{ history.length
+            ? '换一个关键词，或清空检索条件。'
+            : '登记两个模型，写下一个命题，就能开始第一场。' }}
+        </p>
+        <button v-if="!history.length" type="button" class="ghost-button" @click="goPage('register')">去登记</button>
+        <button v-else type="button" class="ghost-button" @click="archiveSearch = ''">清空检索</button>
       </div>
     </section>
 

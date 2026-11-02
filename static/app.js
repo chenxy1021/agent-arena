@@ -581,6 +581,7 @@ Vue.createApp({
       },
       history: [],
       historyLoading: true,
+      archiveSearch: '',
       viewingHistoryId: '',
       canReuseCurrentRun: false,
       participants: [],
@@ -637,6 +638,7 @@ Vue.createApp({
       streamText: '',
       streamTarget: '',
       lastPaper: null,
+      liveFollow: true,
       panelError: '',
       seatFx: {},
       tiebreakAgents: [],
@@ -788,6 +790,7 @@ Vue.createApp({
           elapsed: this.stageElapsed,
         };
       }
+      if (this.lastPaper) return this.lastPaper;
       const round = this.rounds.find((item) => item.no === this.currentRound);
       const thinking = round?.thinking?.[0];
       if (thinking) {
@@ -1149,7 +1152,27 @@ Vue.createApp({
 
     // 档案页：对比模式的可选场次（同一命题优先）
     compareCandidates() {
-      return this.history.slice(0, 30);
+      return this.filteredHistory.slice(0, 30);
+    },
+
+    filteredHistory() {
+      const query = this.archiveSearch.trim().toLowerCase();
+      if (!query) return this.history;
+      return this.history.filter((item) => [
+        item.proposition,
+        item.winner,
+        ...(item.participant_names || []),
+      ].some((value) => String(value || '').toLowerCase().includes(query)));
+    },
+
+    archiveStats() {
+      const completed = this.history.filter((item) => item.status === 'done').length;
+      const models = new Set(this.history.flatMap((item) => item.participant_names || []));
+      return {
+        total: this.history.length,
+        completed,
+        models: models.size,
+      };
     },
 
     // 档案页：模型画像（用历史战报里的分数与胜率聚合）
@@ -1383,6 +1406,20 @@ Vue.createApp({
       this.expandedBallots = { ...this.expandedBallots, [key]: !this.expandedBallots[key] };
     },
 
+    toggleArchiveCompare(id) {
+      if (this.compareIds.includes(id)) {
+        this.compareIds = this.compareIds.filter((item) => item !== id);
+        return;
+      }
+      if (this.compareIds.length >= 3) {
+        this.hint = '一次最多对比 3 场。';
+        this.hintError = true;
+        return;
+      }
+      this.compareIds = [...this.compareIds, id];
+      if (this.compareIds.length >= 2) this.archiveMode = 'compare';
+    },
+
     filteredSpeeches(round) {
       if (!this.recordAgentFilter) return round.speeches || [];
       return (round.speeches || []).filter((speech) => speech.agent === this.recordAgentFilter);
@@ -1428,14 +1465,27 @@ Vue.createApp({
     },
 
     scrollLiveOutput() {
+      const scroller = this.$refs.liveScroll;
+      if (!scroller || !this.liveFollow) return;
+      scroller.scrollTop = scroller.scrollHeight;
       const grid = this.$refs.parallelGrid;
       if (grid) {
         grid.querySelectorAll('.parallel-paper__body').forEach((body) => {
           body.scrollTop = body.scrollHeight;
         });
       }
-      const projection = this.$refs.projectionPanel?.querySelector('.projection__body');
-      if (projection) projection.scrollTop = projection.scrollHeight;
+    },
+
+    handleLiveScroll() {
+      const scroller = this.$refs.liveScroll;
+      if (!scroller) return;
+      const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      this.liveFollow = distance < 56;
+    },
+
+    followLiveOutput() {
+      this.liveFollow = true;
+      this.$nextTick(this.scrollLiveOutput);
     },
 
     parallelElapsed(row) {
@@ -1509,6 +1559,7 @@ Vue.createApp({
         }
         const step = 6 + Math.floor(Math.random() * 4);
         this.streamText = this.streamTarget.slice(0, this.streamText.length + step);
+        this.$nextTick(this.scrollLiveOutput);
       }, 45);
     },
 
@@ -1627,6 +1678,14 @@ Vue.createApp({
 
     applyRoute() {
       const route = this.parseRoute();
+      if (route.page === 'record' && route.id === 'demo') {
+        this.showDemoRecord();
+        return;
+      }
+      if (route.page === 'archive' && route.id === 'demo') {
+        this.showDemoArchive();
+        return;
+      }
       this.currentPage = route.page;
       if (route.page === 'record' && route.id && this.viewingHistoryId !== route.id) {
         this.loadHistoryRun(route.id, { updateHash: false });
@@ -2015,6 +2074,8 @@ Vue.createApp({
       this.stopStream();
       this.streamText = '';
       this.streamTarget = '';
+      this.lastPaper = null;
+      this.liveFollow = true;
       this.panelError = '';
       this.tiebreakAgents = [];
       this.introHint = '';
@@ -2504,6 +2565,8 @@ Vue.createApp({
           this.modelOutputs = {};
           this.parallelRows = [];
           this.parallelRound = 0;
+          this.lastPaper = null;
+          this.liveFollow = true;
           this.parallelReplayNote = false;
           this.clearParallelChunks();
           this.participants = (ev.agents || []).map((a) => ({
@@ -2551,6 +2614,8 @@ Vue.createApp({
           this.modelOutputs = {};
           this.parallelRows = [];
           this.parallelRound = 0;
+          this.lastPaper = null;
+          this.liveFollow = true;
           this.parallelReplayNote = false;
           this.clearParallelChunks();
           this.tiebreakState = null;
@@ -2579,6 +2644,8 @@ Vue.createApp({
             },
           };
           this.setAgentState(ev.agent, 'thinking');
+          this.lastPaper = null;
+          this.liveFollow = true;
           this.liveLabel = `${ev.agent} 正在组织${ev.role}`;
           this.beginStage(ev.agent, `${ev.role}中，等待模型返回`);
           this.waitingMode = false;
@@ -2654,6 +2721,13 @@ Vue.createApp({
           delete outputs[ev.agent];
           this.modelOutputs = outputs;
           this.setAgentState(ev.agent, 'alive');
+          this.lastPaper = {
+            agent: ev.agent,
+            role: ev.role,
+            round: this.currentRound || 1,
+            text: ev.error ? `调用失败：${ev.error}` : (ev.text || ''),
+            elapsed: Number(ev.elapsed || 0),
+          };
           const participant = this.participants.find((p) => p.name === ev.agent);
           if (participant) {
             participant.lastRole = ev.role;
@@ -2669,6 +2743,7 @@ Vue.createApp({
           this.waitingMode = false;
           this.speechArchived = !ev.error;
           this.stopStream();
+          this.$nextTick(this.scrollLiveOutput);
           this.playFx('settle', 380);
           this.sound('ding');
           break;
@@ -2835,6 +2910,9 @@ Vue.createApp({
 
         case 'final':
           this.final = ev;
+          this.lastPaper = null;
+          this.parallelRows = [];
+          this.liveFollow = true;
           this.rounds.forEach((round) => { round.thinking = []; });
           this.setAgentState(ev.agent, 'alive');
           this.liveLabel = `${ev.agent} 正在整理最终结论`;
@@ -2844,6 +2922,7 @@ Vue.createApp({
           this.streamText = ev.text || '';
           this.streamTarget = ev.text || '';
           this.speechArchived = false;
+          this.$nextTick(this.scrollLiveOutput);
           this.playFx('final', 600);
           break;
 
@@ -2965,6 +3044,7 @@ Vue.createApp({
           this.liveLabel = this.final ? '比赛结束，可以回看全过程' : '比赛结束';
           this.rounds.forEach((round) => { round.thinking = []; });
           this.modelOutputs = {};
+          this.liveFollow = true;
           this.elapsed = Number(ev.duration || this.elapsed);
           this.activeAgent = this.winnerName || '';
           this.activeStage = this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
@@ -2974,6 +3054,7 @@ Vue.createApp({
           this.tiebreakState = null;
           this.stopTimer();
           this.loadHistory();
+          this.$nextTick(this.scrollLiveOutput);
           break;
       }
     },

@@ -328,11 +328,10 @@ def _digest(rounds: Sequence[RoundRecord], limit: int = 4000) -> str:
 
 def assign_names(agents: Sequence[Any]) -> None:
     """Keep unique names unchanged; number only duplicate display names."""
-    keys = [getattr(getattr(ag, "spec", None), "key", "agent") or "agent" for ag in agents]
+    keys = [str(getattr(ag, "name", "") or getattr(ag, "label", "") or "agent") for ag in agents]
     totals: Counter[str] = Counter(keys)
     counter: Counter[str] = Counter()
-    for ag in agents:
-        key = getattr(getattr(ag, "spec", None), "key", "agent") or "agent"
+    for ag, key in zip(agents, keys):
         counter[key] += 1
         ag.name = f"{key}#{counter[key]}" if totals[key] > 1 else key
 
