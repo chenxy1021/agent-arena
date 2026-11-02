@@ -962,6 +962,12 @@ select:focus-visible,
   border-radius: 6px;
 }
 
+.ledger__go .row-action:disabled {
+  color: var(--ink-4);
+  cursor: not-allowed;
+  opacity: .62;
+}
+
 .ledger__go .ledger__open {
   min-height: 28px;
   padding: 3px 4px;

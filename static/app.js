@@ -582,6 +582,7 @@ Vue.createApp({
       history: [],
       historyLoading: true,
       viewingHistoryId: '',
+      canReuseCurrentRun: false,
       participants: [],
       rounds: [],
       currentRound: 0,
@@ -1916,6 +1917,7 @@ Vue.createApp({
       this.liveLabel = '等待开始';
       this.replaying = false;
       this.viewingHistoryId = '';
+      this.canReuseCurrentRun = false;
       this.activeAgent = '';
       this.activeStage = '';
       this.stageStartedAt = 0;
@@ -2883,6 +2885,12 @@ Vue.createApp({
         const res = await fetch(`/api/history/${encodeURIComponent(id)}/preset`);
         const preset = await res.json();
         if (!res.ok) throw new Error(cleanError(preset));
+        if (!preset.reusable) {
+          this.hint = preset.warnings?.[0] || '这场旧战报没有可复用的完整预设';
+          this.hintError = true;
+          this.hintOk = false;
+          return;
+        }
 
         await this.loadModels();
         const selected = new Set((preset.model_ids || []).map(Number));
@@ -2942,6 +2950,7 @@ Vue.createApp({
         this.replaying = true;
         this.running = false;
         this.viewingHistoryId = id;
+        this.canReuseCurrentRun = (transcript.setup?.model_ids || []).length >= 2;
         this.proposition = transcript.proposition || this.proposition;
         this.mode = transcript.vote_mode || 'eliminate';
         this.status = 'done';

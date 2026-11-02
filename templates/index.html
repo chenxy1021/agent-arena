@@ -556,7 +556,7 @@
           <p>每一轮发言、每一张选票、每一次出局，都按原样留着。</p>
         </div>
         <div class="record-head-tools">
-          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo' && !running"
+          <button v-if="canReuseCurrentRun && !running"
             type="button" class="ghost-button" @click="reuseHistoryRun(viewingHistoryId)">
             再赛一场
           </button>
@@ -837,7 +837,9 @@
             <template v-else>—</template>
           </span>
           <span class="ledger__go">
-            <button type="button" class="row-action" @click.stop="reuseHistoryRun(item.id)">再赛</button>
+            <button type="button" class="row-action" :disabled="!item.reusable"
+              :title="item.reusable ? '复用这场预设' : '旧战报没有完整预设'"
+              @click.stop="reuseHistoryRun(item.id)">{{ item.reusable ? '再赛' : '旧档案' }}</button>
             <button type="button" class="text-action ledger__open" @click.stop="loadHistoryRun(item.id)">
               查看 <i aria-hidden="true">›</i>
             </button>

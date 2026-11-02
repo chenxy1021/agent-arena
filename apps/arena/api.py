@@ -203,6 +203,9 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         run["round_count"] = len(transcript.get("rounds") or [])
         run["stop_reason"] = str(transcript.get("stop_reason") or "")
         run["converged"] = bool(transcript.get("converged"))
+        run["reusable"] = len(
+            (transcript.get("setup") or {}).get("model_ids") or []
+        ) >= 2
     return {"runs": runs}
 
 
@@ -227,48 +230,46 @@ def build_run_preset(
     setup = transcript.get("setup") or {}
     participants = transcript.get("participants") or []
     by_id = {int(item["id"]): item for item in configs}
-    by_name_model: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    by_name: dict[str, list[dict[str, Any]]] = {}
-    by_model: dict[str, list[dict[str, Any]]] = {}
-    for item in configs:
-        name = str(item.get("name") or "")
-        model = str(item.get("model") or "")
-        by_name_model.setdefault((name, model), []).append(item)
-        by_name.setdefault(name, []).append(item)
-        by_model.setdefault(model, []).append(item)
+    participant_by_id = {
+        int(item.get("config_id") or 0): item
+        for item in participants
+        if int(item.get("config_id") or 0)
+    }
+    model_ids = [
+        int(value)
+        for value in (setup.get("model_ids") or [])
+        if int(value or 0) > 0
+    ]
 
-    def unique(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
-        return candidates[0] if len(candidates) == 1 else None
+    if not setup or len(model_ids) < 2:
+        return {
+            "proposition": str(transcript.get("proposition") or ""),
+            "vote_mode": str(transcript.get("vote_mode") or "eliminate"),
+            "speech_mode": str(transcript.get("speech_mode") or "parallel_buffered"),
+            "timeout": 240.0,
+            "background": "",
+            "constraints": [],
+            "criteria": [],
+            "model_ids": [],
+            "missing_models": [],
+            "reusable": False,
+            "resolved": False,
+            "warnings": ["旧战报未保存当前版本所需的完整预设，请手动重新布置比赛。"],
+        }
 
-    model_ids: list[int] = []
-    matched_names: list[str] = []
     missing_models: list[dict[str, str]] = []
-    for participant in participants:
-        name = str(participant.get("name") or "")
-        model = str(participant.get("model") or participant.get("label") or "")
-        config_id = int(participant.get("config_id") or 0)
-        config = by_id.get(config_id)
-        if not config:
-            config = unique(by_name_model.get((name, model), []))
-        if not config:
-            config = unique(by_name.get(name, []))
-        if not config:
-            config = unique(by_model.get(model, []))
-        if not config:
-            missing_models.append({"name": name or "未命名模型", "model": model})
+    for config_id in model_ids:
+        if config_id in by_id:
             continue
-        resolved_id = int(config["id"])
-        if resolved_id not in model_ids:
-            model_ids.append(resolved_id)
-        matched_names.append(str(config.get("name") or name))
-
-    warnings: list[str] = []
-    if not setup:
-        warnings.append("旧战报未保存完整赛制；已恢复命题、规则和可识别模型。")
+        participant = participant_by_id.get(config_id) or {}
+        missing_models.append({
+            "name": str(participant.get("name") or f"配置 #{config_id}"),
+            "model": str(participant.get("model") or participant.get("label") or ""),
+        })
 
     return {
         "proposition": str(transcript.get("proposition") or ""),
-        "vote_mode": str(setup.get("vote_mode") or transcript.get("vote_mode") or "eliminate"),
+        "vote_mode": str(setup.get("vote_mode") or "eliminate"),
         "speech_mode": str(
             setup.get("speech_mode")
             or transcript.get("speech_mode")
@@ -279,10 +280,10 @@ def build_run_preset(
         "constraints": list(setup.get("constraints") or []),
         "criteria": list(setup.get("criteria") or []),
         "model_ids": model_ids,
-        "matched_models": matched_names,
         "missing_models": missing_models,
+        "reusable": True,
         "resolved": len(model_ids) >= 2 and not missing_models,
-        "warnings": warnings,
+        "warnings": [],
     }
 
 

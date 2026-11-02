@@ -9,6 +9,7 @@ class RunPresetTest(unittest.TestCase):
             "proposition": "test",
             "vote_mode": "support",
             "setup": {
+                "model_ids": [2, 3],
                 "vote_mode": "support",
                 "speech_mode": "sequential_live",
                 "timeout": 90,
@@ -35,7 +36,7 @@ class RunPresetTest(unittest.TestCase):
         self.assertEqual(preset["constraints"], ["constraint"])
         self.assertEqual(preset["criteria"], ["criterion"])
 
-    def test_legacy_transcript_falls_back_to_name_and_model(self) -> None:
+    def test_legacy_transcript_without_setup_is_not_reusable(self) -> None:
         transcript = {
             "proposition": "old",
             "vote_mode": "eliminate",
@@ -51,16 +52,18 @@ class RunPresetTest(unittest.TestCase):
 
         preset = build_run_preset(transcript, configs)
 
-        self.assertTrue(preset["resolved"])
-        self.assertEqual(preset["model_ids"], [7, 8])
+        self.assertFalse(preset["reusable"])
+        self.assertFalse(preset["resolved"])
+        self.assertEqual(preset["model_ids"], [])
         self.assertTrue(preset["warnings"])
 
     def test_missing_model_blocks_a_silent_rerun(self) -> None:
         transcript = {
             "proposition": "old",
+            "setup": {"model_ids": [7, 9]},
             "participants": [
-                {"name": "A", "label": "model-a"},
-                {"name": "B", "label": "deleted-model"},
+                {"name": "A", "model": "model-a", "config_id": 7},
+                {"name": "B", "model": "deleted-model", "config_id": 9},
             ],
         }
         configs = [{"id": 7, "name": "A", "model": "model-a"}]
