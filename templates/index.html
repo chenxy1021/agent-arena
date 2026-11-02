@@ -588,6 +588,26 @@
             <b>{{ matchOutcome.label }} · {{ matchOutcome.title }}</b>
             <p>{{ matchOutcome.detail }}</p>
           </div>
+
+          <article v-if="final && !recordAgentFilter" class="record-final">
+            <span>FINAL DECISION · 最终总结</span>
+            <h2>{{ final.agent }}</h2>
+            <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
+              class="speech-block__para" :class="{ gap: i > 0 }">
+              <mark v-if="block.kind !== 'plain'">{{ block.label }}</mark>{{ block.text }}
+            </div>
+
+            <section v-if="finalDivergence" class="final-divergence" role="note">
+              <h3>保留的分歧 <small>未解决</small></h3>
+              <p v-for="(line, i) in finalDivergence" :key="'d' + i">{{ line }}</p>
+            </section>
+
+            <section v-if="finalPremises" class="final-premise">
+              <h3>前提</h3>
+              <p v-for="(line, i) in finalPremises" :key="'p' + i">{{ line }}</p>
+            </section>
+          </article>
+
           <p v-if="!recordVisibleRounds.length" class="empty-copy">当前筛选下没有记录。</p>
 
           <section v-for="round in recordVisibleRounds" :key="`record-${round.no}`"
@@ -624,24 +644,6 @@
             </div>
           </section>
 
-          <article v-if="final && !recordAgentFilter" class="record-final">
-            <span>FINAL DECISION</span>
-            <h2>{{ final.agent }}</h2>
-            <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
-              class="speech-block__para" :class="{ gap: i > 0 }">
-              <mark v-if="block.kind !== 'plain'">{{ block.label }}</mark>{{ block.text }}
-            </div>
-
-            <section v-if="finalDivergence" class="final-divergence" role="note">
-              <h3>保留的分歧 <small>未解决</small></h3>
-              <p v-for="(line, i) in finalDivergence" :key="'d' + i">{{ line }}</p>
-            </section>
-
-            <section v-if="finalPremises" class="final-premise">
-              <h3>前提</h3>
-              <p v-for="(line, i) in finalPremises" :key="'p' + i">{{ line }}</p>
-            </section>
-          </article>
         </div>
 
         <aside v-if="recordActiveRound" class="record-side">

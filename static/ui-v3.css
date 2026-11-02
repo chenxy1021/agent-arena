@@ -866,6 +866,10 @@ select:focus-visible,
   font-size: 26px;
 }
 
+.record-main > .record-final {
+  margin-bottom: 28px;
+}
+
 .record-empty {
   margin-top: 28px;
 }
