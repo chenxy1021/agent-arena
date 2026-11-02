@@ -612,6 +612,7 @@ Vue.createApp({
       soundOn: false,
       soundSpun: false,
       lang: 'zh',
+      theme: 'dark',
       votingMode: false,
       waitingMode: false,
       waitingSeconds: 0,
@@ -827,6 +828,22 @@ Vue.createApp({
         color: agentColor(name),
         blocks: Math.min(5, Number(count)),
       }));
+    },
+
+    voteFlowItems() {
+      const round = this.rounds.find((item) => item.no === this.currentRound);
+      const rows = round?.voting?.length ? round.voting : (round?.votes?.rows || []);
+      return rows
+        .filter((row) => row.target)
+        .slice(-7)
+        .map((row, index) => ({
+          key: `${row.stage || 'main'}-${row.voter}-${row.target}-${index}`,
+          voter: row.voter || '—',
+          target: row.target,
+          color: agentColor(row.voter),
+          targetColor: agentColor(row.target),
+          isJudge: Boolean(row.is_judge),
+        }));
     },
 
     coreTotal() {
@@ -1226,6 +1243,8 @@ Vue.createApp({
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.soundOn = window.localStorage.getItem('arena-sound') === 'on';
     this.lang = window.ArenaI18n?.lang || 'zh';
+    this.theme = window.localStorage.getItem('arena-theme') === 'light' ? 'light' : 'dark';
+    this.applyTheme(this.theme);
     try {
       this.robotVariants = JSON.parse(window.localStorage.getItem('arena-robot-variants') || '{}');
     } catch (_) {
@@ -1610,31 +1629,20 @@ Vue.createApp({
 
     voteRayPath(from, to) {
       // 射线坐标用舞台坐标系（1100 × 760），与 SVG 的 viewBox 一致。
-      // 起点切向沿座位角方向：控制点放在「起点 + 切向」上，于是弧线先沿桌沿走再收进目标。
       const fx = from.x;
       const fy = from.y;
       const tx = to.x;
       const ty = to.y;
-      const cx = 550;
-      const cy = 420;
-      const rx = 460;
-      const ry = 148;
-      // 起点切向：绕桌心的逆时针切线。
-      const ox = fx - cx;
-      const oy = (fy - cy) * (rx / ry);
-      const len = Math.hypot(ox, oy) || 1;
-      const tx1 = (-oy / len) * 90;
-      const ty1 = (ox / len) * 90 * (ry / rx);
-      const c1x = fx + tx1;
-      const c1y = fy + ty1;
-      // 终点切向反向收进，保证射线是收进去而不是撞上去。
-      const ox2 = tx - cx;
-      const oy2 = (ty - cy) * (rx / ry);
-      const len2 = Math.hypot(ox2, oy2) || 1;
-      const tx2 = (-oy2 / len2) * 46;
-      const ty2 = (ox2 / len2) * 46 * (ry / rx);
-      const c2x = tx - tx2;
-      const c2y = ty - ty2;
+      const dx = tx - fx;
+      const dy = ty - fy;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const bend = Math.min(86, len * .22);
+      const c1x = fx + dx * .32 + nx * bend;
+      const c1y = fy + dy * .32 + ny * bend;
+      const c2x = fx + dx * .72 + nx * bend;
+      const c2y = fy + dy * .72 + ny * bend;
       return `M ${fx} ${fy} C ${c1x} ${c1y} ${c2x} ${c2y} ${tx} ${ty}`;
     },
 
@@ -1650,6 +1658,10 @@ Vue.createApp({
           path: this.voteRayPath(from, to),
           color: agentColor(voter),
           dashed,
+          voter,
+          target,
+          from,
+          to,
         },
       ];
       // 射线在计票完成前一直留着，计票后统一淡出。
@@ -1823,6 +1835,20 @@ Vue.createApp({
 
     toggleLanguage() {
       this.lang = window.ArenaI18n?.toggle() || this.lang;
+    },
+
+    applyTheme(theme) {
+      this.theme = theme === 'light' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = this.theme;
+      document.documentElement.style.colorScheme = this.theme;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', this.theme === 'light' ? '#F4F8F7' : '#04070A');
+    },
+
+    toggleTheme() {
+      const next = this.theme === 'dark' ? 'light' : 'dark';
+      this.applyTheme(next);
+      window.localStorage.setItem('arena-theme', next);
     },
 
     sound(kind) {

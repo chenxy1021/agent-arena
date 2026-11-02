@@ -33,17 +33,20 @@ chain-of-thought. When a compatible provider returns `reasoning_content` or
 | Evidence | Multi-dimensional scores, claim ledger, stance spread, round transcript |
 | Reliability | Concurrent voting, request timeouts, retries, stop control, SSE heartbeats |
 | Records | Searchable history, final decision first, reusable run presets |
-| Interface | Responsive desktop/mobile UI with Chinese and English switching |
+| Interface | Responsive desktop/mobile UI, light/dark themes, Chinese and English switching |
 
 ## Interface
 
 | Setup | Record |
 | --- | --- |
 | ![Setup](docs/screenshots/register.png) | ![Record](docs/screenshots/record.png) |
+| **Archive compare** | **Light mode** |
+| ![Archive compare](docs/screenshots/archive.png) | ![Light mode](docs/screenshots/arena-light.png) |
 
 The live room keeps generation, voting, tiebreak, and archive progress visible.
-Parallel speeches show received character count and elapsed time. Votes are sent
-concurrently, so one slow provider does not block the round.
+Each ballot is drawn as a directional trace and repeated in a clear voter-to-target
+board. Compare view uses one alignment grid, so every archive row starts on the
+same baseline. A daylight theme is available from the top bar and persists locally.
 
 ## Quick Start
 
