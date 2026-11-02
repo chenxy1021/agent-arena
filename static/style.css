@@ -681,7 +681,7 @@ code {
 
 .council-stage {
   position: absolute;
-  top: 170px;
+  top: 88px;
   left: 50%;
   width: 1100px;
   height: 760px;
@@ -1683,74 +1683,6 @@ code {
 }
 
 .claim--empty { color: var(--ink-3); }
-
-/* --- Replay handle ---------------------------------------------------- */
-
-.replay-handle {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 46px;
-  padding: 0 32px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.replay-handle button {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--hairline);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ink-2);
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-
-.replay-handle button:hover:not(:disabled) {
-  border-color: var(--live);
-  color: var(--ink);
-}
-
-.replay-handle button:disabled { opacity: .35; cursor: default; }
-
-.replay-handle .replay-speed {
-  width: auto;
-  padding: 0 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.replay-track {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.replay-track i {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--hairline-strong);
-  cursor: pointer;
-}
-
-.replay-track i.done { background: rgba(61, 232, 192, .45); }
-.replay-track i.current { background: var(--live); box-shadow: 0 0 8px var(--live-glow); }
-
-.replay-count {
-  flex: 0 0 auto;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
 
 /* --- Rolling number --------------------------------------------------- */
 
@@ -2925,7 +2857,6 @@ code {
   .council-core { width: 150px; }
   .council-intro-hint { display: none; }
   .claim-strip { padding: 10px 16px; }
-  .replay-handle { padding: 0 16px; }
   .studio__form { grid-template-columns: 1fr; }
   .studio__form .hint,
   .studio__form .cta { grid-column: auto; }

@@ -61,13 +61,19 @@
       </button>
     </nav>
 
-    <button type="button" class="sound-toggle" :class="{ on: soundOn, spun: soundSpun }"
-      :aria-pressed="soundOn" :aria-label="soundOn ? '关闭声音' : '打开声音'" @click="toggleSound">
-      <svg class="sound-toggle__icon" aria-hidden="true">
-        <use :href="soundOn ? '#icon-sound' : '#icon-muted'"></use>
-      </svg>
-      <span class="sound-toggle__label">{{ soundOn ? '声音' : '静音' }}</span>
-    </button>
+    <div class="topbar-actions">
+      <button type="button" class="lang-toggle" @click="toggleLanguage"
+        :aria-label="lang === 'zh' ? 'Switch to English' : '切换到中文'">
+        {{ lang === 'zh' ? 'EN' : '中' }}
+      </button>
+      <button type="button" class="sound-toggle" :class="{ on: soundOn, spun: soundSpun }"
+        :aria-pressed="soundOn" :aria-label="soundOn ? '关闭声音' : '打开声音'" @click="toggleSound">
+        <svg class="sound-toggle__icon" aria-hidden="true">
+          <use :href="soundOn ? '#icon-sound' : '#icon-muted'"></use>
+        </svg>
+        <span class="sound-toggle__label">{{ soundOn ? '声音' : '静音' }}</span>
+      </button>
+    </div>
   </header>
 
   <main id="main-content" class="app-main" tabindex="-1">
@@ -311,6 +317,25 @@
         </div>
       </div>
 
+      <div v-if="participants.length" class="council-livebar"
+        :class="{ 'is-voting': votingMode, 'is-tiebreak': tiebreakActive }"
+        role="status" aria-live="polite">
+        <i class="council-livebar__pulse" aria-hidden="true"></i>
+        <div class="council-livebar__copy">
+          <b>{{ liveLabel }}</b>
+          <small>{{ activeStage }}</small>
+        </div>
+        <span v-if="votingMode && !tiebreakActive" class="council-livebar__metric">
+          {{ votingProgressLabel }}
+        </span>
+        <span v-if="tiebreakActive" class="council-livebar__metric is-danger">
+          {{ tiebreakProgressLabel }}
+        </span>
+        <span v-if="waitingMode" class="council-livebar__metric">
+          已等待 {{ waitingSeconds }}s
+        </span>
+      </div>
+
       <div ref="stage" class="council-scene" :style="sceneStyle" :class="fxClass">
         <div class="council-scene__grid" aria-hidden="true"></div>
         <div class="council-scene__light" aria-hidden="true"></div>
@@ -424,7 +449,7 @@
                 <span class="parallel-paper__bar" aria-hidden="true">
                   <i :style="{ transform: 'scaleX(' + parallelRatio(row) + ')' }"></i>
                 </span>
-                <p>{{ row.error || (row.done ? '生成完成，等待统一公开' : '正在生成，当前席位内容暂不公开') }}</p>
+                <p>{{ row.error || (row.done ? '生成完成，等待统一公开' : parallelWaitingText(row)) }}</p>
               </div>
               <footer class="parallel-paper__foot">
                 <span>{{ row.role }}</span>
@@ -437,30 +462,36 @@
           <p class="parallel-board__foot">所有席位同屏展开；单卡完成不会再遮住其他人的观点。</p>
         </section>
 
-        <div class="projection" v-if="currentPaper"
-          :class="{ final: currentPaper.final, waiting: !currentPaper.text, done: speechArchived, error: panelError }"
+        <div class="projection" v-if="(currentPaper || running || replaying) && !parallelVisible"
+          :class="{ final: currentPaper?.final, waiting: !currentPaper?.text, status: !currentPaper, done: speechArchived, error: panelError }"
           ref="panel"
-          :style="{ '--team-color': agentColor(currentPaper.agent) }">
+          :style="{ '--team-color': agentColor(currentPaper ? currentPaper.agent : activeAgent) }">
           <i class="projection__error" aria-hidden="true"></i>
           <div class="projection__progress" :style="{ width: remainingPercent + '%' }" aria-hidden="true"></div>
           <header class="projection__head">
-            <robot-avatar :name="currentPaper.agent" :spec="robotSpec(currentPaper.agent)"
+            <robot-avatar v-if="currentPaper" :name="currentPaper.agent" :spec="robotSpec(currentPaper.agent)"
               :color="agentColor(currentPaper.agent)" :state="robotState(currentPaper.agent)" :size="28"></robot-avatar>
-            <template v-if="currentPaper.final">
+            <template v-if="currentPaper?.final">
               <span class="projection__final-label">FINAL DECISION</span>
               <b class="projection__final-name">{{ displayName(currentPaper.agent) }}</b>
             </template>
-            <template v-else>
+            <template v-else-if="currentPaper">
               <b>{{ displayName(currentPaper.agent) }}</b>
             </template>
-            <span class="projection__role">{{ currentPaper.role }} · {{ agentModel(currentPaper.agent) }}</span>
-            <span v-if="agentPersona(currentPaper.agent)" class="projection__persona">
+            <template v-else>
+              <i class="projection__live-dot" aria-hidden="true"></i>
+              <b>{{ liveLabel }}</b>
+            </template>
+            <span class="projection__role">
+              {{ currentPaper ? `${currentPaper.role} · ${agentModel(currentPaper.agent)}` : activeStage }}
+            </span>
+            <span v-if="currentPaper && agentPersona(currentPaper.agent)" class="projection__persona">
               {{ agentPersona(currentPaper.agent) }}
             </span>
-            <span v-if="!currentPaper.final" class="projection__clock">{{ remainingTimeText }}</span>
+            <span v-if="currentPaper && !currentPaper.final" class="projection__clock">{{ remainingTimeText }}</span>
           </header>
           <div class="projection__body" aria-live="polite">
-            <template v-if="currentPaper.text">
+            <template v-if="currentPaper?.text">
               <template v-if="currentPaper.final">
                 <div class="projection__block">
                   <mark class="mark-conclusion">【结论】</mark><span
@@ -482,13 +513,15 @@
               </template>
             </template>
             <p v-else class="projection__waiting">
-              {{ displayName(currentPaper.agent) }} 正在整理观点<span class="dots"><i></i><i></i><i></i></span>
+              {{ currentPaper
+                ? `${displayName(currentPaper.agent)} 正在整理观点`
+                : (activeStage || liveLabel) }}<span class="dots"><i></i><i></i><i></i></span>
             </p>
             <p v-if="panelError" class="projection__error-text">{{ panelError }}</p>
           </div>
           <footer class="projection__foot">
-            <span v-if="speechArchived" class="projection__saved">已归档</span>
-            <span v-else-if="waitingMode" class="projection__waiting-time">
+            <span v-if="currentPaper && speechArchived" class="projection__saved">已归档</span>
+            <span v-else-if="currentPaper && waitingMode" class="projection__waiting-time">
               等待服务商响应 {{ waitingSeconds }}s
             </span>
             <span v-else class="projection__stream">{{ liveLabel }}</span>
@@ -521,30 +554,6 @@
         <span v-if="!roundClaims.length" class="claim claim--empty">这一轮还没有人开口。</span>
       </div>
 
-      <div v-if="participants.length && replayFrames.length" class="replay-handle">
-        <button type="button" @click="replayStep(-1)" :disabled="replayIndex <= 0"
-          aria-label="上一句" title="上一句">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 6l-8 6 8 6z"></path></svg>
-        </button>
-        <button type="button" @click="toggleReplay" :aria-label="replayPlaying ? '暂停回放' : '开始回放'"
-          :title="replayPlaying ? '暂停' : '播放'">
-          <svg v-if="replayPlaying" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8 5h3v14H8zM15 5h3v14h-3z"></path>
-          </svg>
-          <svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"></path></svg>
-        </button>
-        <button type="button" @click="replayStep(1)" :disabled="replayIndex >= replayFrames.length - 1"
-          aria-label="下一句" title="下一句">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M6 6l8 6-8 6z"></path></svg>
-        </button>
-        <span class="replay-track">
-          <i v-for="(frame, idx) in replayFrames" :key="`frame-${idx}`"
-            :class="{ done: idx < replayIndex, current: idx === replayIndex }"
-            @click="replayIndex = idx"></i>
-        </span>
-        <span class="replay-count">{{ replayIndex + 1 }} / {{ replayFrames.length }}</span>
-        <button type="button" class="replay-speed" @click="cycleReplaySpeed">{{ replaySpeed }}×</button>
-      </div>
     </section>
 
     <!-- 记录页 -->
@@ -591,13 +600,18 @@
         <div class="record-main">
           <div v-if="matchOutcome" class="match-outcome" :class="'is-' + matchOutcome.kind">
             <span>结束方式</span>
-            <b>{{ matchOutcome.label }} · {{ matchOutcome.title }}</b>
+            <b>{{ matchOutcome.label }} · {{ matchOutcome.title }}
+              <small v-if="matchOutcome.model">{{ matchOutcome.model }}</small>
+            </b>
             <p>{{ matchOutcome.detail }}</p>
           </div>
 
           <article v-if="final" class="record-final">
             <span>FINAL DECISION · 最终总结</span>
             <h2>{{ final.agent }}</h2>
+            <p v-if="agentModel(final.agent)" class="record-final__model">
+              {{ agentModel(final.agent) }}
+            </p>
             <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
               class="speech-block__para" :class="{ gap: i > 0 }">
               <mark v-if="block.kind !== 'plain'">{{ block.label }}</mark>{{ block.text }}
@@ -1016,6 +1030,7 @@
   </div>
 </div>
 <script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

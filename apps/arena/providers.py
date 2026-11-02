@@ -210,10 +210,9 @@ class ApiModelAgent:
 def suggest_display_name(agent: ApiModelAgent, timeout: float = 30) -> str:
     """Ask a configured model for a short display name; this also tests connectivity."""
     prompt = random.choice((
-        "给自己起个名字。",
-        "你希望自己叫什么？",
-        "现在给自己取一个名字。",
-        "用一个名字代表你。",
+        "请给自己起一个 2-8 个字的中文显示名，只回复名称，不要解释。",
+        "为一个 AI 辩手取一个 2-8 个字的中文名字，只回复名称。",
+        "给这个模型取一个简洁的中文名字，只回复名称，不要标点。",
     ))
     result = agent.ask(prompt, timeout=timeout, retries=0)
     if result.error:

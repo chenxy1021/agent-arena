@@ -27,8 +27,8 @@ class ModelUpdate(ModelCreate):
 class ModelNameRequest(BaseModel):
     model_id: int | None = None
     base_url: str = Field(min_length=1, max_length=500)
-    api_key: str = Field(min_length=1, max_length=500)
     model: str = Field(min_length=1, max_length=200)
+    api_key: str = Field(default="", max_length=500)
 
 
 class StartRun(BaseModel):

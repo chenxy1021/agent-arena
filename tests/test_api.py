@@ -1,9 +1,21 @@
 import unittest
 
 from apps.arena.api import build_run_preset
+from apps.arena.schemas import ModelNameRequest
 
 
 class RunPresetTest(unittest.TestCase):
+    def test_name_suggestion_can_reuse_an_existing_saved_key(self) -> None:
+        request = ModelNameRequest.model_validate({
+            "model_id": 7,
+            "base_url": "http://127.0.0.1:1/v1",
+            "model": "test-model",
+            "api_key": "",
+        })
+
+        self.assertEqual(request.model_id, 7)
+        self.assertEqual(request.api_key, "")
+
     def test_setup_snapshot_reuses_config_ids_and_context(self) -> None:
         transcript = {
             "proposition": "test",

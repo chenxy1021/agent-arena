@@ -900,15 +900,15 @@ class Arena:
                 background=self.cfg.background,
                 constraints=self.cfg.constraints,
             )
-            last_err = ""
-            for attempt in range(2):
-                res = agent.ask(
-                    prompt, self._workdir(agent), min(self.cfg.timeout, 150),
-                    self.cfg.retries if attempt == 0 else 0,
-                )
-                if res.error:
-                    last_err = res.error
-                    continue
+            res = agent.ask(
+                prompt,
+                self._workdir(agent),
+                min(self.cfg.timeout, 90),
+                0,
+            )
+            if res.error:
+                last_err = res.error
+            else:
                 target, reason, scores = parse_ballot(res.text, names, agent.name)
                 if target:
                     vote = Vote(rnd, agent.name, target, reason, None, is_judge, stage, weight, scores)
@@ -939,7 +939,8 @@ class Arena:
             return vote
 
         votes: list[Vote] = []
-        with ThreadPoolExecutor(max_workers=min(len(voters), 10)) as pool:
+        # 所有投票者同时提交，慢模型不会阻塞其他人。
+        with ThreadPoolExecutor(max_workers=max(1, len(voters))) as pool:
             futures = {pool.submit(task, a): a for a in voters}
             for fut in as_completed(futures):
                 agent = futures[fut]

@@ -610,9 +610,11 @@ Vue.createApp({
       timer: null,
       soundOn: false,
       soundSpun: false,
+      lang: 'zh',
       votingMode: false,
       waitingMode: false,
       waitingSeconds: 0,
+      tiebreakState: null,
       speechArchived: false,
       eventFx: '',
       hitAgent: '',
@@ -628,10 +630,6 @@ Vue.createApp({
       focusBeforeModal: null,
       stances: {},
       priorStances: {},
-      replayFrames: [],
-      replayIndex: 0,
-      replayPlaying: false,
-      replaySpeed: 1,
       voteRays: [],
       voteRaySeq: 0,
       previewMorph: false,
@@ -735,6 +733,36 @@ Vue.createApp({
       const min = String(Math.floor(remaining / 60)).padStart(2, '0');
       const sec = String(Math.floor(remaining % 60)).padStart(2, '0');
       return `${min}:${sec}`;
+    },
+
+    votingProgressLabel() {
+      const round = this.rounds.find((item) => item.no === this.currentRound);
+      const total = Number(round?.votingStage?.voters || 0);
+      const done = (round?.voting || []).filter(
+        (row) => row.stage === round?.votingStage?.stage
+          && (row.status === 'done' || row.status === 'error'),
+      ).length;
+      const started = Number(round?.votingStage?.startedAt || 0);
+      const waited = started ? Math.max(0, Math.floor((Date.now() - started) / 1000)) : 0;
+      return total
+        ? `已投 ${done}/${total} · 已等待 ${waited}s · 同时投票`
+        : '正在同时投票';
+    },
+
+    tiebreakActive() {
+      return Boolean(
+        this.tiebreakState
+        && !['decided', 'failed', 'cleared'].includes(this.tiebreakState.status),
+      );
+    },
+
+    tiebreakProgressLabel() {
+      const state = this.tiebreakState;
+      if (!state) return '';
+      const agents = (state.agents || []).join(' / ');
+      const stage = state.status === 'speaking' ? '加赛发言' : '加赛投票';
+      const progress = state.status === 'voting' ? ` · ${this.votingProgressLabel}` : '';
+      return `第 ${state.attempt} 次加赛 · ${agents} · ${stage}${progress}`;
     },
 
     currentPaper() {
@@ -1088,6 +1116,8 @@ Vue.createApp({
             ? Number(speech?.stance ?? row.stance)
             : null,
           error: speech?.error || row.error || '',
+          startedAt: row.startedAt || 0,
+          waitSeconds: Number(row.waitSeconds || 0),
           spec: this.robotSpec(row.name),
         };
       });
@@ -1106,6 +1136,7 @@ Vue.createApp({
           kind: 'winner',
           label: '胜出',
           title: this.winnerName,
+          model: this.agentModel(this.winnerName),
           detail: this.converged ? '完成投票裁决；比赛过程中曾出现立场趋同。' : '比赛完成全部必要轮次。',
         };
       }
@@ -1200,6 +1231,7 @@ Vue.createApp({
   mounted() {
     this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.soundOn = window.localStorage.getItem('arena-sound') === 'on';
+    this.lang = window.ArenaI18n?.lang || 'zh';
     try {
       this.robotVariants = JSON.parse(window.localStorage.getItem('arena-robot-variants') || '{}');
     } catch (_) {
@@ -1215,6 +1247,7 @@ Vue.createApp({
     window.addEventListener('hashchange', this.applyRoute);
     this.$nextTick(this.setupStage);
     this.$nextTick(this.syncNavIndicator);
+    this.$nextTick(() => window.ArenaI18n?.init());
     if (this.soundOn) {
       window.addEventListener('pointerdown', () => this.enableSound(), { once: true });
     }
@@ -1389,11 +1422,27 @@ Vue.createApp({
       return Math.max(0.04, Math.min(1, chars / 2000));
     },
 
+    parallelElapsed(row) {
+      const started = Number(row.startedAt || 0);
+      if (!started) return Number(row.waitSeconds || 0);
+      return Math.max(
+        Number(row.waitSeconds || 0),
+        Math.floor((Date.now() - started) / 1000),
+      );
+    },
+
+    parallelWaitingText(row) {
+      const elapsed = this.parallelElapsed(row);
+      const chars = Number(row.chars || 0);
+      const phase = elapsed < 4 ? '正在理解命题' : elapsed < 12 ? '正在组织论证' : '正在生成回应';
+      return `${phase} · 已等待 ${elapsed}s${chars ? ` · 已接收 ${chars.toLocaleString()} 字符` : ''}`;
+    },
+
     parallelRowState(row) {
       if (row.error) return '调用失败';
       if (row.text) return '已展开';
       if (row.done) return '待公开';
-      return '生成中';
+      return `思考中 ${this.parallelElapsed(row)}s`;
     },
 
     paperBlocks(text) {
@@ -1690,6 +1739,10 @@ Vue.createApp({
       }
     },
 
+    toggleLanguage() {
+      this.lang = window.ArenaI18n?.toggle() || this.lang;
+    },
+
     sound(kind) {
       if (!this.soundOn) return;
       this.enableSound();
@@ -1926,6 +1979,7 @@ Vue.createApp({
       this.votingMode = false;
       this.waitingMode = false;
       this.waitingSeconds = 0;
+      this.tiebreakState = null;
       this.speechArchived = false;
       this.eventFx = '';
       this.hitAgent = '';
@@ -1934,9 +1988,6 @@ Vue.createApp({
       this.archiveStamp = '';
       this.stances = {};
       this.priorStances = {};
-      this.replayFrames = [];
-      this.replayIndex = 0;
-      this.replayPlaying = false;
       this.voteRays = [];
       this.stopStream();
       this.streamText = '';
@@ -1954,7 +2005,6 @@ Vue.createApp({
       this.claims = [];
       this.roundScores = {};
       this.stopArmed = false;
-      window.clearInterval(this._replayTimer);
       window.clearTimeout(this._fxTimer);
       window.clearTimeout(this._hitTimer);
       window.clearTimeout(this._waitingTimer);
@@ -2345,7 +2395,6 @@ Vue.createApp({
       this.converged = Boolean(transcript.converged);
       this.currentRound = transcript.rounds.length;
       this.elapsed = transcript.duration;
-      this.buildReplayFrames();
       this.activeAgent = transcript.winner;
     },
 
@@ -2471,6 +2520,7 @@ Vue.createApp({
           this.parallelRows = [];
           this.parallelRound = 0;
           this.parallelReplayNote = false;
+          this.tiebreakState = null;
           round.alive = ev.alive;
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
@@ -2528,6 +2578,13 @@ Vue.createApp({
 
         case 'waiting':
           this.setAgentState(ev.agent, 'thinking');
+          {
+            const row = this.parallelRows.find((item) => item.name === ev.agent);
+            if (row) {
+              row.waitSeconds = Number(ev.elapsed || 0);
+              this.parallelRows = [...this.parallelRows];
+            }
+          }
           this.activeAgent = ev.agent;
           this.activeStage = `${ev.role}中，已等待 ${Number(ev.elapsed || 0).toFixed(1)} 秒`;
           this.stageStartedAt = Date.now() - Number(ev.elapsed || 0) * 1000;
@@ -2589,7 +2646,15 @@ Vue.createApp({
             stage: ev.stage || 'main',
             voters: ev.voters || 0,
             candidates: ev.candidates || [],
+            startedAt: Date.now(),
           };
+          if (String(ev.stage || '').startsWith('tiebreak')) {
+            this.tiebreakState = {
+              attempt: Number(String(ev.stage).split('-')[1]) || this.tiebreakState?.attempt || 1,
+              agents: [...(this.tiebreakState?.agents || ev.candidates || [])],
+              status: 'voting',
+            };
+          }
           this.beginStage('', `${ev.voters} 位投票者正在判断本轮发言`);
           this.liveLabel = `第 ${ev.round_no} 轮 · ${this.voteStageLabel(ev.stage)}：${ev.voters} 位投票者`;
           this.liveVoteCounts = {};
@@ -2641,6 +2706,11 @@ Vue.createApp({
           this.beginStage('', `${ev.agents.join('、')} 平票，进入第 ${ev.attempt} 次加赛`);
           this.liveLabel = `第 ${ev.round_no} 轮 · ${ev.agents.join('、')} 平票加赛`;
           this.tiebreakAgents = ev.agents || [];
+          this.tiebreakState = {
+            attempt: ev.attempt,
+            agents: [...(ev.agents || [])],
+            status: ev.status || 'speaking',
+          };
           this.playFx('tiebreak', 900);
           break;
         }
@@ -2649,6 +2719,11 @@ Vue.createApp({
           const round = this.ensureRound(ev.round_no || this.currentRound || 1);
           const step = round.tiebreakSteps.find((item) => item.attempt === ev.attempt);
           if (step) Object.assign(step, ev);
+          this.tiebreakState = {
+            attempt: ev.attempt,
+            agents: [...(this.tiebreakState?.agents || step?.agents || [])],
+            status: ev.status || 'tied',
+          };
           this.liveLabel = `第 ${ev.round_no} 轮 · 第 ${ev.attempt} 次加赛投票完成`;
           this.beginStage('', '加赛票已收到，正在本地汇总');
           this.liveVoteCounts = {};
@@ -2687,6 +2762,7 @@ Vue.createApp({
           this.votingMode = false;
           this.liveVoteCounts = {};
           this.tiebreakAgents = [];
+          this.tiebreakState = null;
           // 出局者保留席位号与删除线，并标记转任评审。
           this.eliminatedInfo = {
             agent: ev.agent,
@@ -2718,6 +2794,7 @@ Vue.createApp({
           this.votingMode = false;
           this.waitingMode = false;
           this.tiebreakAgents = [];
+          this.tiebreakState = null;
           this.playFx('winner', 1600);
           this.sound('winner');
           break;
@@ -2740,6 +2817,7 @@ Vue.createApp({
           this.parallelRound = ev.round_no || this.currentRound || 1;
           this.parallelRows = (ev.agents || []).map((name) => ({
             name, chars: 0, done: false, text: '', elapsed: 0, stance: null, error: '',
+            startedAt: Date.now(), waitSeconds: 0,
           }));
           this.liveLabel = `第 ${this.parallelRound} 轮 · ${this.parallelRows.length} 位并行生成中`;
           this.beginStage('', '并行生成中，完成后全员观点同屏展开');
@@ -2811,6 +2889,7 @@ Vue.createApp({
           this.status = 'cancelled';
           this.statusText = '已停止';
           this.stopReason = ev.reason || '用户中止';
+          this.tiebreakState = null;
           this.liveLabel = `已停止 · 保留已完成轮次${ev.reason ? '（' + ev.reason + '）' : ''}`;
           this.stopTimer();
           this.playFx('settle', 500);
@@ -2846,8 +2925,8 @@ Vue.createApp({
           this.stageStartedAt = 0;
           this.votingMode = false;
           this.waitingMode = false;
+          this.tiebreakState = null;
           this.stopTimer();
-          this.buildReplayFrames();
           this.loadHistory();
           break;
       }
@@ -3004,7 +3083,6 @@ Vue.createApp({
           this.final = { agent: transcript.winner, text: transcript.final_answer };
         }
         this.currentRound = Math.max(0, ...((transcript.rounds || []).map((r) => Number(r.no) || 0)));
-        this.buildReplayFrames();
         this.liveLabel = '历史战报已载入';
         this.activeAgent = transcript.winner || '';
         this.activeStage = '历史回放完成';
@@ -3145,55 +3223,6 @@ Vue.createApp({
       return model?.persona || '';
     },
 
-    buildReplayFrames() {
-      const frames = [];
-      for (const round of this.rounds) {
-        for (const speech of round.speeches || []) {
-          if (speech.error || !speech.text) continue;
-          frames.push({
-            agent: speech.agent,
-            role: speech.role,
-            text: speech.text,
-            round: round.no,
-          });
-        }
-      }
-      this.replayFrames = frames;
-      this.replayIndex = Math.max(0, frames.length - 1);
-    },
-
-    replayStep(delta) {
-      if (!this.replayFrames.length) return;
-      this.replayIndex = Math.max(
-        0,
-        Math.min(this.replayFrames.length - 1, this.replayIndex + delta),
-      );
-      this.replayPlaying = false;
-    },
-
-    toggleReplay() {
-      if (!this.replayFrames.length) return;
-      if (this.replayIndex >= this.replayFrames.length - 1) this.replayIndex = 0;
-      this.replayPlaying = !this.replayPlaying;
-      this.runReplayTimer();
-    },
-
-    cycleReplaySpeed() {
-      this.replaySpeed = this.replaySpeed === 1 ? 2 : this.replaySpeed === 2 ? 0.5 : 1;
-    },
-
-    runReplayTimer() {
-      window.clearInterval(this._replayTimer);
-      if (!this.replayPlaying) return;
-      this._replayTimer = window.setInterval(() => {
-        if (this.replayIndex >= this.replayFrames.length - 1) {
-          this.replayPlaying = false;
-          window.clearInterval(this._replayTimer);
-          return;
-        }
-        this.replayIndex += 1;
-      }, 1200 / this.replaySpeed);
-    },
   },
 
 }).mount('#app');
