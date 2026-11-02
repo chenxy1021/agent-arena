@@ -589,7 +589,7 @@
             <p>{{ matchOutcome.detail }}</p>
           </div>
 
-          <article v-if="final && !recordAgentFilter" class="record-final">
+          <article v-if="final" class="record-final">
             <span>FINAL DECISION · 最终总结</span>
             <h2>{{ final.agent }}</h2>
             <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
