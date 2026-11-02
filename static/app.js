@@ -2088,7 +2088,6 @@ Vue.createApp({
     async startDemo() {
       this.resetArena();
       this.proposition = this.proposition.trim() || '远程办公是否应该永久化';
-      this.models = DEMO_MODELS.map((model) => ({ ...model }));
       this.goPage('venue');
       this.running = true;
       this.status = 'running';
