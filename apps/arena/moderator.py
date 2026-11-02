@@ -35,8 +35,9 @@ VOTE_LOOSE_RE = re.compile(r"vote[\"'\s]*[:：]\s*[\"“']([^\"”'\n,}]+)")
 VOTE_MODES = ("eliminate", "support")
 SPEECH_MODES = ("parallel_buffered", "sequential_live")
 
-CONVERGENCE_SPREAD = 25   # 立场极差 ≤ 25 视为收敛，提前收束
+CONVERGENCE_SPREAD = 25   # 立场极差 ≤ 25 记为收敛，但不替代完整赛程
 DIVERGENCE_SPREAD = 150  # 立场极差 ≥ 150 视为分歧过大，动态 +1 轮
+MIN_CONVERGENCE_ROUND = 2  # 首轮是独立开场，至少两轮后才判断收敛
 JUDGE_WEIGHT = 0.5       # 评审票权重
 MAX_REASON_CHARS = 200
 
@@ -98,8 +99,6 @@ class ArenaConfig:
     criteria: list[str] = field(default_factory=list)
     background: str = ""
     constraints: list[str] = field(default_factory=list)
-    max_calls: int = 0        # 0 = 不限
-    max_wall_clock: float = 0  # 0 = 不限
 
 
 @dataclass
@@ -402,18 +401,6 @@ class Arena:
     def _persona_of(self, agent: Any) -> str:
         return str(getattr(agent, "persona", "") or "")
 
-    # -- 预算 ----------------------------------------------------------
-    def _budget_used(self) -> int:
-        return int(self._usage.get("calls", 0))
-
-    def _budget_exceeded(self, started: float) -> bool:
-        cfg = self.cfg
-        if cfg.max_calls and self._budget_used() >= cfg.max_calls:
-            return True
-        if cfg.max_wall_clock and (time.monotonic() - started) >= cfg.max_wall_clock:
-            return True
-        return False
-
     def _record_usage(self, agent: Any, res: CallResult) -> None:
         self._usage["calls"] = int(self._usage.get("calls", 0)) + 1
         tokens = int(res.usage.get("total_tokens") or 0)
@@ -532,15 +519,16 @@ class Arena:
                     break
                 continue
 
-            # 立场离散度：收敛则提前收束，分歧过大则动态 +1 轮。
+            # 立场离散度只作为赛况读数；首轮独立开场不能据此结束比赛。
             record.stance_spread = self._stance_spread(active, record)
             self.sink.emit("spread", round_no=rnd, spread=record.stance_spread)
-            if record.stance_spread is not None and record.stance_spread <= CONVERGENCE_SPREAD:
+            if (
+                rnd >= MIN_CONVERGENCE_ROUND
+                and record.stance_spread is not None
+                and record.stance_spread <= CONVERGENCE_SPREAD
+            ):
                 converged = True
                 self.sink.emit("converged", round_no=rnd, spread=record.stance_spread)
-                rounds.append(record)
-                self._rounds_cache.append(record)
-                break
             if record.stance_spread is not None and record.stance_spread >= DIVERGENCE_SPREAD:
                 max_rounds += 1
 
@@ -549,13 +537,6 @@ class Arena:
                 rounds.append(record)
                 self._rounds_cache.append(record)
                 continue
-
-            if self._budget_exceeded(t0):
-                self._stop_reason = "预算上限"
-                self.sink.emit("stopped", reason="预算上限")
-                rounds.append(record)
-                self._rounds_cache.append(record)
-                break
 
             # ---- 3. 全员投票：存活者 + 评审团 ----
             voters = list(self._judges) + list(active)

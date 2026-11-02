@@ -1453,3 +1453,336 @@ select:focus-visible,
     animation: none !important;
   }
 }
+
+/* Session plan and runtime telemetry */
+
+.rule__plan {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rule__plan > span {
+  display: grid;
+  grid-template-columns: 24px 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(3, 7, 11, .28);
+}
+
+.rule__plan i,
+.rule__plan em,
+.usage-readout {
+  font-family: var(--mono);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.rule__plan i {
+  color: var(--live);
+  font-size: 10px;
+}
+
+.rule__plan b {
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.rule__plan em {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
+.usage-readout {
+  color: var(--ink-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Parallel papers: every seat stays visible while results are revealed. */
+
+.parallel-board {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, calc(100% - 48px));
+  max-height: calc(100% - 32px);
+  padding: 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(16, 31, 50, .96), rgba(5, 12, 20, .94));
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(18px);
+  animation: parallel-board-in 360ms var(--ease-out);
+}
+
+@keyframes parallel-board-in {
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.parallel-board__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  flex: 0 0 auto;
+  padding: 2px 2px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.parallel-board__head div {
+  display: grid;
+  gap: 4px;
+}
+
+.parallel-board__head span,
+.parallel-board__head em,
+.parallel-board__foot,
+.parallel-paper__head em,
+.parallel-paper__foot {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.parallel-board__head span {
+  color: var(--live);
+  letter-spacing: .16em;
+}
+
+.parallel-board__head b {
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.parallel-board__head em {
+  color: var(--ink-3);
+}
+
+.parallel-board.is-complete .parallel-board__head em {
+  color: var(--live);
+}
+
+.parallel-board__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+  min-height: 0;
+  padding: 12px 2px 2px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.parallel-paper {
+  display: flex;
+  flex-direction: column;
+  min-height: 220px;
+  max-height: 330px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-top: 2px solid var(--team-color);
+  border-radius: 10px;
+  background: rgba(4, 11, 19, .78);
+}
+
+.parallel-paper.speaking {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--team-color) 22%, transparent);
+}
+
+.parallel-paper__head {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px 9px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.parallel-paper__head > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.parallel-paper__head b {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parallel-paper__head small {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.parallel-paper__head em {
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.parallel-paper__head em.live {
+  color: var(--live);
+}
+
+.parallel-paper__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 11px 12px;
+  overflow: auto;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.65;
+  scrollbar-width: thin;
+}
+
+.parallel-paper__block {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+
+.parallel-paper__block:last-child {
+  margin-bottom: 0;
+}
+
+.parallel-paper__block mark {
+  margin-right: 4px;
+  color: var(--team-color);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.parallel-paper__waiting {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: center;
+  gap: 12px;
+  padding: 18px 14px;
+}
+
+.parallel-paper__waiting p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.parallel-paper__bar {
+  position: relative;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: rgba(120, 170, 200, .12);
+}
+
+.parallel-paper__bar i {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: var(--team-color);
+  transition: transform 240ms var(--ease-out);
+}
+
+.parallel-paper:not(.done) .parallel-paper__bar i {
+  animation: gen-breathe 1.4s var(--ease-linear) infinite;
+}
+
+.parallel-paper__foot {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-4);
+}
+
+.parallel-board__foot {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10px 2px 0;
+  color: var(--ink-3);
+}
+
+.match-outcome {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--live);
+  border-radius: 10px;
+  background: var(--live-weak);
+}
+
+.match-outcome span {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--live);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  writing-mode: vertical-rl;
+}
+
+.match-outcome b {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.match-outcome p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.match-outcome.is-stopped {
+  border-left-color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.match-outcome.is-stopped span {
+  color: var(--amber);
+}
+
+@media (max-width: 720px) {
+  .parallel-board {
+    top: 8px;
+    width: calc(100% - 20px);
+    max-height: calc(100% - 20px);
+    padding: 10px;
+  }
+
+  .parallel-board__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .parallel-paper {
+    min-height: 190px;
+    max-height: 280px;
+  }
+
+  .rule__plan > span {
+    grid-template-columns: 22px 66px minmax(0, 1fr);
+  }
+}

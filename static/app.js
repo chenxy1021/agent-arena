@@ -523,52 +523,10 @@ const SpreadGauge = {
   `,
 };
 
-// 并行生成矩阵：只显示头像、进度、字数与状态，不泄露发言内容。
-const ParallelMatrix = {
-  components: { RobotAvatar },
-  props: {
-    rows: { type: Array, default: () => [] },
-    round: { type: Number, default: 0 },
-    target: { type: Number, default: 2000 },
-  },
-  computed: {
-    doneCount() { return this.rows.filter((row) => row.done).length; },
-  },
-  methods: {
-    agentColor,
-    ratio(row) {
-      const target = Math.max(200, Number(this.target) || 2000);
-      return Math.max(0, Math.min(1, (row.chars || 0) / target));
-    },
-  },
-  template: `
-    <div class="gen-matrix" aria-live="polite">
-      <header class="gen-matrix__head">
-        <b>第 {{ round }} 轮 · {{ rows.length }} 位并行生成中</b>
-        <span class="gen-matrix__count">{{ doneCount }}/{{ rows.length }} 完成</span>
-      </header>
-      <ul class="gen-matrix__rows">
-        <li v-for="row in rows" :key="row.name" class="gen-cell"
-          :class="{ 'is-done': row.done }">
-          <robot-avatar :name="row.name" :spec="row.spec" :color="agentColor(row.name)"
-            :size="22"></robot-avatar>
-          <b class="gen-cell__name">{{ row.name }}</b>
-          <span class="gen-bar" aria-hidden="true">
-            <i :style="{ transform: 'scaleX(' + ratio(row) + ')' }"></i>
-          </span>
-          <em class="gen-cell__chars">{{ (row.chars || 0).toLocaleString() }} 字</em>
-          <span class="gen-cell__state">{{ row.done ? '完成' : '生成中' }}</span>
-        </li>
-      </ul>
-      <p class="gen-matrix__foot">本轮结束后按席位顺序回放</p>
-    </div>
-  `,
-};
-
 Vue.createApp({
   components: {
     RollingNumber, TallyBlocks, WeightedTally, ScoreMatrix, ClaimLedger,
-    SpreadGauge, ParallelMatrix, RobotAvatar, TopPiece,
+    SpreadGauge, RobotAvatar, TopPiece,
   },
 
   data() {
@@ -591,8 +549,6 @@ Vue.createApp({
       propOpen: { context: false, criteria: false },
       constraintDraft: '',
       criterionDraft: '',
-      maxCalls: 0,
-      maxWallClock: 0,
       budget: null,
       spread: null,
       parallelRows: [],
@@ -633,6 +589,8 @@ Vue.createApp({
       winnerName: '',
       status: 'idle',
       statusText: '待命',
+      stopReason: '',
+      converged: false,
       liveLabel: '等待开始',
       running: false,
       replaying: false,
@@ -789,6 +747,7 @@ Vue.createApp({
           final: true,
         };
       }
+      if (this.parallelVisible) return null;
       const stream = this.modelStreams[0];
       if (stream) {
         return {
@@ -1091,28 +1050,68 @@ Vue.createApp({
       return Math.max(...values) - Math.min(...values);
     },
 
-    // 会场页 HUD：预算读数
-    budgetReadout() {
+    // 会场页 HUD：实际运行用量，不作为停止条件。
+    usageReadout() {
       const budget = this.budget;
       if (!budget) return null;
-      const limit = Number(this.maxCalls) || 0;
       const used = Number(budget.calls) || 0;
       const tokens = Number(budget.tokens_estimate) || 0;
-      const state = !limit ? '' : used >= limit ? 'is-over' : used >= limit * 0.8 ? 'is-tight' : '';
-      return {
-        text: `${used.toLocaleString()} 次调用 · ${tokens.toLocaleString()} tok`,
-        state,
-        limit,
-        used,
-      };
+      return `${used.toLocaleString()} 次调用 · ${tokens.toLocaleString()} tok`;
     },
 
-    // 会场页：并行生成矩阵的行数据
-    parallelMatrixRows() {
-      return this.parallelRows.map((row) => ({
-        ...row,
-        spec: this.robotSpec(row.name),
-      }));
+    parallelVisible() {
+      return this.speechMode === 'parallel_buffered'
+        && this.parallelRows.length > 0
+        && this.parallelRound === this.currentRound;
+    },
+
+    // 并行发言看板：所有席位始终同屏，完成一位就展开一位。
+    parallelPapers() {
+      const round = this.rounds.find((item) => item.no === this.parallelRound);
+      const speeches = new Map(
+        (round?.speeches || []).map((speech) => [speech.agent, speech]),
+      );
+      const role = this.parallelRound === 1 ? '独立发言' : '综合发言';
+      return this.parallelRows.map((row, index) => {
+        const speech = speeches.get(row.name);
+        const participant = this.participants.find((item) => item.name === row.name);
+        return {
+          ...row,
+          index: index + 1,
+          role: speech?.role || role,
+          persona: participant?.persona || '',
+          model: participant?.label || '',
+          text: speech?.text || row.text || '',
+          elapsed: Number(speech?.elapsed ?? row.elapsed ?? 0),
+          stance: Number.isFinite(Number(speech?.stance ?? row.stance))
+            ? Number(speech?.stance ?? row.stance)
+            : null,
+          error: speech?.error || row.error || '',
+          spec: this.robotSpec(row.name),
+        };
+      });
+    },
+
+    parallelDoneCount() {
+      return this.parallelRows.filter((row) => row.done).length;
+    },
+
+    matchOutcome() {
+      if (this.stopReason) {
+        return { kind: 'stopped', label: '中止', title: this.stopReason, detail: '保留已完成的全部轮次与发言。' };
+      }
+      if (this.winnerName) {
+        return {
+          kind: 'winner',
+          label: '胜出',
+          title: this.winnerName,
+          detail: this.converged ? '完成投票裁决；比赛过程中曾出现立场趋同。' : '比赛完成全部必要轮次。',
+        };
+      }
+      if (this.converged) {
+        return { kind: 'converged', label: '收敛', title: '立场趋于一致', detail: '收敛只作为赛况读数，不跳过投票与裁决。' };
+      }
+      return null;
     },
 
     // 记录页：评分矩阵（当轮优先，全局兜底）
@@ -1384,6 +1383,18 @@ Vue.createApp({
       return (round.speeches || []).filter((speech) => speech.agent === this.recordAgentFilter);
     },
 
+    parallelRatio(row) {
+      const chars = Number(row.chars || 0);
+      return Math.max(0.04, Math.min(1, chars / 2000));
+    },
+
+    parallelRowState(row) {
+      if (row.error) return '调用失败';
+      if (row.text) return '已展开';
+      if (row.done) return '待公开';
+      return '生成中';
+    },
+
     paperBlocks(text) {
       const blocks = this.speechBlocks(text);
       if (blocks.length === 1 && blocks[0].kind === 'plain' && String(text || '').includes('【结论】')) {
@@ -1614,6 +1625,8 @@ Vue.createApp({
     historyStatus(item) {
       if (item.status === 'running') return '进行中';
       if (item.status === 'error') return '中断';
+      if (item.stop_reason) return '已停止';
+      if (item.converged && !item.winner) return '已收敛';
       return '完成';
     },
 
@@ -1898,6 +1911,8 @@ Vue.createApp({
       this.eventCount = 0;
       this.status = 'idle';
       this.statusText = '待命';
+      this.stopReason = '';
+      this.converged = false;
       this.liveLabel = '等待开始';
       this.replaying = false;
       this.viewingHistoryId = '';
@@ -1998,8 +2013,6 @@ Vue.createApp({
         background: this.background.trim(),
         constraints: this.constraints.slice(),
         criteria: this.criteria.slice(),
-        max_calls: Number(this.maxCalls) || 0,
-        max_wall_clock: Number(this.maxWallClock) || 0,
       };
 
       try {
@@ -2231,6 +2244,8 @@ Vue.createApp({
           final_status: index === 0 ? 'adopted' : 'dormant',
         })),
         budget: { calls: 24, tokens_estimate: 12480, wall_clock: 252, per_model: {} },
+        stop_reason: '',
+        converged: false,
         schema_version: 2,
         participants: DEMO_MODELS.map((model) => ({ name: model.name, label: model.model })),
         rounds: [
@@ -2325,6 +2340,8 @@ Vue.createApp({
       this.final = { agent: transcript.winner, text: transcript.final_answer };
       this.claims = transcript.claims || [];
       this.budget = transcript.budget || null;
+      this.stopReason = transcript.stop_reason || '';
+      this.converged = Boolean(transcript.converged);
       this.currentRound = transcript.rounds.length;
       this.elapsed = transcript.duration;
       this.buildReplayFrames();
@@ -2404,6 +2421,9 @@ Vue.createApp({
       switch (ev.kind) {
         case 'run_start':
           this.modelOutputs = {};
+          this.parallelRows = [];
+          this.parallelRound = 0;
+          this.parallelReplayNote = false;
           this.participants = (ev.agents || []).map((a) => ({
             name: a.name,
             label: a.label,
@@ -2447,6 +2467,9 @@ Vue.createApp({
         case 'round_start': {
           const round = this.ensureRound(ev.no);
           this.modelOutputs = {};
+          this.parallelRows = [];
+          this.parallelRound = 0;
+          this.parallelReplayNote = false;
           round.alive = ev.alive;
           round.order = ev.order || [];
           this.liveLabel = `第 ${ev.no} 轮 · ${ev.alive} 人存活`;
@@ -2515,7 +2538,23 @@ Vue.createApp({
         case 'speech': {
           const round = this.ensureRound(this.currentRound || 1);
           round.thinking = round.thinking.filter((x) => x.agent !== ev.agent);
-          round.speeches.push(ev);
+          const duplicate = round.speeches.some(
+            (speech) => speech.agent === ev.agent
+              && speech.role === ev.role
+              && speech.text === ev.text,
+          );
+          if (!duplicate) round.speeches.push(ev);
+          const parallelRow = this.parallelRows.find((row) => row.name === ev.agent);
+          if (parallelRow) {
+            Object.assign(parallelRow, {
+              text: ev.text || '',
+              elapsed: Number(ev.elapsed || 0),
+              stance: Number.isFinite(Number(ev.stance)) ? Number(ev.stance) : null,
+              error: ev.error || '',
+              done: true,
+            });
+            this.parallelRows = [...this.parallelRows];
+          }
           if (Number.isFinite(ev.stance)) {
             this.stances = { ...this.stances, [ev.agent]: ev.stance };
           }
@@ -2699,10 +2738,10 @@ Vue.createApp({
         case 'parallel_start': {
           this.parallelRound = ev.round_no || this.currentRound || 1;
           this.parallelRows = (ev.agents || []).map((name) => ({
-            name, chars: 0, done: false,
+            name, chars: 0, done: false, text: '', elapsed: 0, stance: null, error: '',
           }));
           this.liveLabel = `第 ${this.parallelRound} 轮 · ${this.parallelRows.length} 位并行生成中`;
-          this.beginStage('', '并行生成中，本轮结束后按席位顺序回放');
+          this.beginStage('', '并行生成中，完成后全员观点同屏展开');
           this.playFx('scan', 620);
           break;
         }
@@ -2724,7 +2763,7 @@ Vue.createApp({
 
         case 'parallel_replay': {
           this.parallelReplayNote = true;
-          this.liveLabel = `回放中 · 第 ${ev.index}/${ev.total} 位`;
+          this.liveLabel = `同屏展开 · 第 ${ev.index}/${ev.total} 位`;
           window.clearTimeout(this._parallelNoteTimer);
           this._parallelNoteTimer = window.setTimeout(() => {
             this.parallelReplayNote = false;
@@ -2761,7 +2800,8 @@ Vue.createApp({
         }
 
         case 'converged': {
-          this.liveLabel = `立场收敛（极差 ${ev.spread}），提前收束`;
+          this.converged = true;
+          this.liveLabel = `立场趋同（极差 ${ev.spread}），继续完成投票裁决`;
           break;
         }
 
@@ -2769,6 +2809,7 @@ Vue.createApp({
           this.running = false;
           this.status = 'cancelled';
           this.statusText = '已停止';
+          this.stopReason = ev.reason || '用户中止';
           this.liveLabel = `已停止 · 保留已完成轮次${ev.reason ? '（' + ev.reason + '）' : ''}`;
           this.stopTimer();
           this.playFx('settle', 500);
@@ -2906,6 +2947,8 @@ Vue.createApp({
         }
         this.claims = transcript.claims || [];
         this.budget = transcript.budget || null;
+        this.stopReason = transcript.stop_reason || '';
+        this.converged = Boolean(transcript.converged);
         this.spread = null;
         if (transcript.winner && transcript.final_answer) {
           this.final = { agent: transcript.winner, text: transcript.final_answer };

@@ -164,8 +164,8 @@ async def run_events(run_id: str, request: Request, after: int = Query(default=0
             events = run.sink.since(index)
             for event in events:
                 payload = json.dumps(event, ensure_ascii=False)
-                yield f"id: {index}\ndata: {payload}\n\n"
                 index += 1
+                yield f"id: {index}\ndata: {payload}\n\n"
             if run.status != "running" and not events:
                 yield "event: end\ndata: {}\n\n"
                 return
@@ -201,6 +201,8 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
             if isinstance(round_record, dict) and round_record.get("eliminated")
         ]
         run["round_count"] = len(transcript.get("rounds") or [])
+        run["stop_reason"] = str(transcript.get("stop_reason") or "")
+        run["converged"] = bool(transcript.get("converged"))
     return {"runs": runs}
 
 

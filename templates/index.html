@@ -235,7 +235,7 @@
               </div>
               <p class="rule__note rule__note--sm">
                 {{ speechMode === 'parallel_buffered'
-                  ? '同时生成，本轮结束后按席位顺序回放'
+                  ? '同时生成，完成后全员观点同屏展开'
                   : '逐个实时生成，能看到每个模型的思考过程' }}
               </p>
             </div>
@@ -252,21 +252,14 @@
             </div>
 
             <div class="rule__section">
-              <span class="rule__label">预算上限</span>
-              <label class="rule__budget-row">
-                <span>调用次数</span>
-                <input v-model.number="maxCalls" type="number" min="0" step="10"
-                  aria-label="调用次数上限" placeholder="不限">
-                <em>次</em>
-              </label>
-              <label class="rule__budget-row">
-                <span>总时长</span>
-                <input v-model.number="maxWallClock" type="number" min="0" step="60"
-                  aria-label="总时长上限秒数" placeholder="不限">
-                <em>秒</em>
-              </label>
+              <span class="rule__label">赛程预览</span>
+              <div class="rule__plan" aria-label="赛程规则">
+                <span><i>01</i><b>独立开场</b><em>首轮保留分歧，不判收敛</em></span>
+                <span><i>02</i><b>交叉裁决</b><em>第 2 轮起投票，逐轮淘汰</em></span>
+                <span><i>03</i><b>完整收束</b><em>不因等待或用量中途停止</em></span>
+              </div>
               <p class="rule__note rule__note--sm">
-                {{ (maxCalls || maxWallClock) ? '任一上限到达即收束并归档' : '留空即不限，单场可能产生较多调用' }}
+                本轮上限 {{ Math.max(selectedModelIds.length, 2) }} 轮；收敛读数只展示赛况，不跳过裁决。
               </p>
             </div>
           </section>
@@ -305,8 +298,9 @@
           </span>
           <span class="council-hud__readouts">
             <spread-gauge :spread="spreadValue"></spread-gauge>
-            <span v-if="budgetReadout" class="budget-readout" :class="budgetReadout.state"
-              aria-live="polite">{{ budgetReadout.text }}</span>
+            <span v-if="usageReadout" class="usage-readout" aria-live="polite">
+              {{ usageReadout }}
+            </span>
           </span>
           <span class="council-hud__clock"><rolling-number :text="elapsedText"></rolling-number></span>
           <button type="button" class="stop-button" :class="{ armed: stopArmed }"
@@ -397,8 +391,51 @@
           </div>
         </div>
 
-        <parallel-matrix v-if="parallelRows.length && !currentPaper"
-          :rows="parallelMatrixRows" :round="parallelRound"></parallel-matrix>
+        <section v-if="parallelVisible && !final" class="parallel-board"
+          :class="{ 'is-complete': parallelDoneCount === parallelPapers.length }"
+          aria-label="并行发言同屏看板">
+          <header class="parallel-board__head">
+            <div>
+              <span>PARALLEL ROOM</span>
+              <b>第 {{ parallelRound }} 轮 · {{ parallelPapers.length }} 位同屏发言</b>
+            </div>
+            <em>{{ parallelDoneCount }}/{{ parallelPapers.length }} 已生成</em>
+          </header>
+          <div class="parallel-board__grid">
+            <article v-for="row in parallelPapers" :key="'parallel-' + row.name"
+              class="parallel-paper" :class="{ done: row.done, speaking: row.text }"
+              :style="{ '--team-color': agentColor(row.name) }">
+              <header class="parallel-paper__head">
+                <robot-avatar :name="row.name" :spec="row.spec" :color="agentColor(row.name)"
+                  :state="row.text ? 'idle' : row.done ? 'idle' : 'thinking'" :size="30"></robot-avatar>
+                <span>
+                  <b>{{ displayName(row.name) }}</b>
+                  <small>{{ row.model }} · {{ row.persona || '无预设人格' }}</small>
+                </span>
+                <em :class="{ live: row.done }">{{ parallelRowState(row) }}</em>
+              </header>
+              <div v-if="row.text" class="parallel-paper__body">
+                <div v-for="(block, blockIndex) in paperBlocks(row.text)" :key="blockIndex"
+                  class="parallel-paper__block">
+                  <mark v-if="block.marker" :class="'mark-' + block.kind">{{ block.marker }}</mark>{{ block.text }}
+                </div>
+              </div>
+              <div v-else class="parallel-paper__waiting">
+                <span class="parallel-paper__bar" aria-hidden="true">
+                  <i :style="{ transform: 'scaleX(' + parallelRatio(row) + ')' }"></i>
+                </span>
+                <p>{{ row.error || (row.done ? '生成完成，等待统一公开' : '正在生成，当前席位内容暂不公开') }}</p>
+              </div>
+              <footer class="parallel-paper__foot">
+                <span>{{ row.role }}</span>
+                <span v-if="row.stance !== null">立场 {{ row.stance > 0 ? '+' : '' }}{{ row.stance }}</span>
+                <span>{{ (row.chars || 0).toLocaleString() }} 字</span>
+                <span v-if="row.elapsed">{{ row.elapsed.toFixed(1) }}s</span>
+              </footer>
+            </article>
+          </div>
+          <p class="parallel-board__foot">所有席位同屏展开；单卡完成不会再遮住其他人的观点。</p>
+        </section>
 
         <div class="projection" v-if="currentPaper"
           :class="{ final: currentPaper.final, waiting: !currentPaper.text, done: speechArchived, error: panelError }"
@@ -472,7 +509,7 @@
         <span v-if="introHint && participants.length" class="council-intro-hint">{{ introHint }}</span>
       </div>
 
-      <p v-if="parallelReplayNote" class="parallel-note">本轮为并行生成，正在回放</p>
+      <p v-if="parallelReplayNote" class="parallel-note">本轮为并行生成，正在同屏展开</p>
 
       <div v-if="participants.length" class="claim-strip" aria-label="本轮主张">
         <span class="claim-strip__kicker">本轮主张</span>
@@ -546,6 +583,11 @@
         </aside>
 
         <div class="record-main">
+          <div v-if="matchOutcome" class="match-outcome" :class="'is-' + matchOutcome.kind">
+            <span>结束方式</span>
+            <b>{{ matchOutcome.label }} · {{ matchOutcome.title }}</b>
+            <p>{{ matchOutcome.detail }}</p>
+          </div>
           <p v-if="!recordVisibleRounds.length" class="empty-copy">当前筛选下没有记录。</p>
 
           <section v-for="round in recordVisibleRounds" :key="`record-${round.no}`"

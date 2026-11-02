@@ -336,6 +336,17 @@ class ConvergenceTest(unittest.TestCase):
         self.assertEqual(spread, 4)
         self.assertLessEqual(spread, 25)
 
+    def test_first_round_cannot_end_the_match_as_converged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(Arena, "_stance_spread", return_value=0):
+                result = Arena(
+                    [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+                    ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                ).run()
+
+        self.assertGreaterEqual(len(result.rounds), 2)
+        self.assertIsNotNone(result.winner)
+
 
 class StanceSpreadTest(unittest.TestCase):
     def test_spread_is_max_minus_min(self) -> None:

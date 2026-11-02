@@ -40,5 +40,3 @@ class StartRun(BaseModel):
     background: str = Field(default="", max_length=4000)
     constraints: list[str] = Field(default_factory=list, max_length=20)
     criteria: list[str] = Field(default_factory=list, max_length=20)
-    max_calls: int = Field(default=0, ge=0, le=2000)
-    max_wall_clock: int = Field(default=0, ge=0, le=86400)

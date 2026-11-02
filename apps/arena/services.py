@@ -112,8 +112,6 @@ class Manager:
             criteria=list(payload.criteria or []),
             background=payload.background,
             constraints=list(payload.constraints or []),
-            max_calls=payload.max_calls,
-            max_wall_clock=float(payload.max_wall_clock or 0),
         )
 
         def worker() -> None:

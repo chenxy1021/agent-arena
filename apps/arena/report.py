@@ -36,13 +36,13 @@ def _md(result: ArenaResult) -> str:
     add(f"- **最终存活**：{result.winner or '（无）'}")
     add(f"- **发言方式**：{result.speech_mode}")
     if result.converged:
-        add("- **收束**：立场收敛，提前结束")
+        add("- **共识**：至少有两位存活者的立场趋于一致")
     if result.stop_reason:
         add(f"- **中止原因**：{result.stop_reason}")
     budget = result.budget or {}
     if budget:
         add(
-            f"- **成本**：{budget.get('calls', 0)} 次调用 · 约 {budget.get('tokens_estimate', 0)} tokens"
+            f"- **运行用量**：{budget.get('calls', 0)} 次调用 · 约 {budget.get('tokens_estimate', 0)} tokens"
         )
     add("")
 
