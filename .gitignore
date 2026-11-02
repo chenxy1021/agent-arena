@@ -6,3 +6,4 @@ __pycache__/
 arena.db
 arena.db-*
 runs/
+docs/*.md
