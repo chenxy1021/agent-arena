@@ -336,6 +336,7 @@
         </span>
       </div>
 
+      <div class="council-workspace">
       <div ref="stage" class="council-scene" :style="sceneStyle" :class="fxClass">
         <div class="council-scene__grid" aria-hidden="true"></div>
         <div class="council-scene__light" aria-hidden="true"></div>
@@ -359,11 +360,6 @@
           <svg class="council-rays" :class="{ bright: rayBright }" viewBox="0 0 1100 760" aria-hidden="true">
             <path v-for="ray in voteRays" :key="ray.id" class="ray" :class="{ dashed: ray.dashed }"
               :d="ray.path" :stroke="ray.color" vector-effect="non-scaling-stroke" />
-          </svg>
-
-          <svg class="council-guide" viewBox="0 0 1100 760" aria-hidden="true"
-            v-if="currentPaper && running && activeAgent">
-            <path class="guide-line" :d="guidePath" />
           </svg>
 
           <div class="council-seats">
@@ -416,6 +412,49 @@
           </div>
         </div>
 
+        <div v-if="!participants.length" class="council-empty">
+          <span class="council-empty__eyebrow">Arena standby</span>
+          <strong>议事舱待命</strong>
+          <p>灯还没亮。先登记模型，写下命题，然后开始比赛。</p>
+          <div class="council-empty__actions">
+            <button type="button" class="cta" @click="goPage('register')">布置比赛</button>
+            <button type="button" class="ghost-button" @click="goPage('models')">管理模型</button>
+          </div>
+        </div>
+
+        <span v-if="introHint && participants.length" class="council-intro-hint">{{ introHint }}</span>
+      </div>
+
+      <aside v-if="participants.length" class="live-console" aria-label="实时会议室">
+        <header class="live-console__head">
+          <span class="live-console__eyebrow"><i aria-hidden="true"></i> 实时会议室</span>
+          <b>{{ activeStage || liveLabel }}</b>
+          <small>{{ liveLabel }}</small>
+        </header>
+
+        <section v-if="tiebreakActive" class="tiebreak-panel" role="status" aria-live="assertive">
+          <span class="tiebreak-panel__kicker">TIEBREAK / 加赛进行中</span>
+          <strong>第 {{ tiebreakState.attempt }} 次加赛 · {{ tiebreakState.agents.join(' / ') }}</strong>
+          <p>
+            {{ tiebreakState.status === 'speaking'
+              ? '平票模型正在补充发言，实时内容见下方。'
+              : tiebreakState.status === 'voting'
+                ? '评审正在同时投票，票数汇总后立即公布。'
+                : tiebreakState.status === 'tied'
+                  ? '本轮加赛仍然平票，正在准备下一次加赛。'
+                  : '正在汇总加赛结果。' }}
+          </p>
+          <span v-if="tiebreakState.status === 'voting'" class="tiebreak-panel__metric">
+            {{ votingProgressLabel }}
+          </span>
+          <span v-else-if="tiebreakState.status === 'tied'" class="tiebreak-panel__metric">
+            仍平票 · 即将继续加赛
+          </span>
+          <span v-else class="tiebreak-panel__metric">
+            {{ waitingMode ? `已等待 ${waitingSeconds}s` : `已进行 ${Math.floor(stageElapsed)}s` }}
+          </span>
+        </section>
+
         <section v-if="parallelVisible && !final" class="parallel-board"
           :class="{ 'is-complete': parallelDoneCount === parallelPapers.length }"
           aria-label="并行发言同屏看板">
@@ -426,7 +465,7 @@
             </div>
             <em>{{ parallelDoneCount }}/{{ parallelPapers.length }} 已生成</em>
           </header>
-          <div class="parallel-board__grid">
+          <div ref="parallelGrid" class="parallel-board__grid">
             <article v-for="row in parallelPapers" :key="'parallel-' + row.name"
               class="parallel-paper" :class="{ done: row.done, speaking: row.text }"
               :style="{ '--team-color': agentColor(row.name) }">
@@ -437,7 +476,7 @@
                   <b>{{ displayName(row.name) }}</b>
                   <small>{{ row.model }} · {{ row.persona || '无预设人格' }}</small>
                 </span>
-                <em :class="{ live: row.done }">{{ parallelRowState(row) }}</em>
+                <em :class="{ live: !row.done }">{{ parallelRowState(row) }}</em>
               </header>
               <div v-if="row.text" class="parallel-paper__body">
                 <div v-for="(block, blockIndex) in paperBlocks(row.text)" :key="blockIndex"
@@ -464,7 +503,7 @@
 
         <div class="projection" v-if="(currentPaper || running || replaying) && !parallelVisible"
           :class="{ final: currentPaper?.final, waiting: !currentPaper?.text, status: !currentPaper, done: speechArchived, error: panelError }"
-          ref="panel"
+          ref="projectionPanel"
           :style="{ '--team-color': agentColor(currentPaper ? currentPaper.agent : activeAgent) }">
           <i class="projection__error" aria-hidden="true"></i>
           <div class="projection__progress" :style="{ width: remainingPercent + '%' }" aria-hidden="true"></div>
@@ -529,30 +568,14 @@
           <span class="projection__scan" aria-hidden="true"></span>
         </div>
 
-        <div v-if="!participants.length" class="council-empty">
-          <span class="council-empty__eyebrow">Arena standby</span>
-          <strong>议事舱待命</strong>
-          <p>灯还没亮。先登记模型，写下命题，然后开始比赛。</p>
-          <div class="council-empty__actions">
-            <button type="button" class="cta" @click="goPage('register')">布置比赛</button>
-            <button type="button" class="ghost-button" @click="goPage('models')">管理模型</button>
-          </div>
+        <div v-if="!parallelVisible && !currentPaper && !running && !replaying" class="live-console__empty">
+          <strong>等待下一场比赛</strong>
+          <p>开赛后，模型发言、思考进度和加赛状态都会在这里实时出现。</p>
         </div>
-
-        <span v-if="introHint && participants.length" class="council-intro-hint">{{ introHint }}</span>
+      </aside>
       </div>
 
       <p v-if="parallelReplayNote" class="parallel-note">本轮为并行生成，正在同屏展开</p>
-
-      <div v-if="participants.length" class="claim-strip" aria-label="本轮主张">
-        <span class="claim-strip__kicker">本轮主张</span>
-        <span v-for="claim in roundClaims" :key="`claim-${claim.name}`" class="claim"
-          :style="{ '--team-color': agentColor(claim.name) }" :title="claim.text">
-          <i class="claim__bar" aria-hidden="true"></i>
-          <b>{{ claim.name }}</b>{{ claim.initial }}
-        </span>
-        <span v-if="!roundClaims.length" class="claim claim--empty">这一轮还没有人开口。</span>
-      </div>
 
     </section>
 

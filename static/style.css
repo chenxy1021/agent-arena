@@ -1646,44 +1646,6 @@ code {
   100% { transform: translateX(0); opacity: 1; }
 }
 
-/* --- Claim strip ------------------------------------------------------ */
-
-.claim-strip {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 12px 32px;
-  overflow-x: auto;
-  border-top: 1px solid var(--hairline);
-  border-bottom: 1px solid var(--hairline);
-}
-
-.claim-strip__kicker {
-  flex: 0 0 auto;
-  color: var(--ink-3);
-  font-size: 12px;
-}
-
-.claim {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-  color: var(--ink-2);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.claim b { color: var(--ink); font-weight: 600; }
-
-.claim__bar {
-  width: 2px;
-  height: 12px;
-  background: var(--team-color);
-}
-
-.claim--empty { color: var(--ink-3); }
-
 /* --- Rolling number --------------------------------------------------- */
 
 .rolling-number {
@@ -2856,7 +2818,6 @@ code {
   .seat.is-danger .seat__name b::after { content: ""; }
   .council-core { width: 150px; }
   .council-intro-hint { display: none; }
-  .claim-strip { padding: 10px 16px; }
   .studio__form { grid-template-columns: 1fr; }
   .studio__form .hint,
   .studio__form .cta { grid-column: auto; }
@@ -2883,6 +2844,8 @@ code {
   .seat__figure,
   .projection__glitch,
   .projection.final .projection__body,
+  .live-console__eyebrow i,
+  .tiebreak-panel,
   .holo-stage__ring,
   .holo-stage__bot,
   .rail__dot,

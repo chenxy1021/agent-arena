@@ -400,6 +400,9 @@ class ParallelSpeechTest(unittest.TestCase):
         self.assertIn("parallel_start", kinds)
         self.assertIn("parallel_done", kinds)
         self.assertIn("parallel_replay", kinds)
+        progress = [event for event in sink.events if event["kind"] == "parallel_progress"]
+        self.assertTrue(progress)
+        self.assertTrue(all(event.get("text") for event in progress))
         self.assertEqual([s.agent for s in result.rounds[0].speeches], result.rounds[0].order)
 
     def test_transcript_has_claims_and_budget(self) -> None:

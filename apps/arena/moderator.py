@@ -712,7 +712,7 @@ class Arena:
 
         def task(agent: Any) -> tuple[str, CallResult]:
             self.sink.emit("thinking", agent=agent.name, role=role)
-            # 并行模式不直接流式吐内容：只回传字数进度，避免泄露他人发言。
+            # 同轮模型彼此看不到这些事件；界面可安全展示真实流式文本。
             def on_chunk(chunk: str) -> None:
                 self._parallel_chars[agent.name] = self._parallel_chars.get(agent.name, 0) + len(chunk)
                 self.sink.emit(
@@ -720,6 +720,7 @@ class Arena:
                     round_no=rnd,
                     agent=agent.name,
                     chars=self._parallel_chars[agent.name],
+                    text=chunk,
                 )
 
             res = self._ask_with_progress(

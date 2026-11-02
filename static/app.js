@@ -644,7 +644,6 @@ Vue.createApp({
       rayBright: false,
       eliminatedInfo: null,
       narrow: false,
-      panelBox: { bottom: 0, left: 0, right: 0 },
       expandedBallots: {},
       navIndicator: { left: 0, width: 24 },
     };
@@ -760,7 +759,9 @@ Vue.createApp({
       const state = this.tiebreakState;
       if (!state) return '';
       const agents = (state.agents || []).join(' / ');
-      const stage = state.status === 'speaking' ? '加赛发言' : '加赛投票';
+      const stage = state.status === 'speaking'
+        ? '加赛发言'
+        : state.status === 'tied' ? '仍平票' : '加赛投票';
       const progress = state.status === 'voting' ? ` · ${this.votingProgressLabel}` : '';
       return `第 ${state.attempt} 次加赛 · ${agents} · ${stage}${progress}`;
     },
@@ -804,23 +805,6 @@ Vue.createApp({
     // 投影面板的流式正文：每 45ms 吐 6–9 个字，不做逐字打字机。
     paperText() {
       return this.streamText;
-    },
-
-    // 光柱顶端与面板底部之间的 1px 虚线引导线。
-    guidePath() {
-      const seat = this.seats.find((item) => item.name === this.activeAgent);
-      if (!seat) return '';
-      const panel = this.$refs.panel;
-      const stage = this.$refs.stage?.querySelector('.council-stage');
-      if (!panel || !stage) return '';
-      const panelRect = panel.getBoundingClientRect();
-      const stageRect = stage.getBoundingClientRect();
-      const scale = Number(this.stageScale) || 1;
-      // 面板在舞台之外，把它的下沿换算回舞台坐标系。
-      const panelBottom = (panelRect.bottom - stageRect.top) / scale;
-      if (panelBottom <= 0) return '';
-      const seatTop = seat.y - 46;
-      return `M ${seat.x} ${seatTop} L ${seat.x} ${panelBottom}`;
     },
 
     tableVoteCounts() {
@@ -1019,22 +1003,6 @@ Vue.createApp({
       return seats;
     },
 
-    roundClaims() {
-      const round = this.rounds.find((item) => item.no === this.currentRound);
-      if (!round) return [];
-      return (round.speeches || [])
-        .filter((speech) => !speech.error && speech.text)
-        .map((speech) => {
-          const view = String(speech.text).match(/【观点】([\s\S]*)/);
-          const source = (view ? view[1] : speech.text).replace(/\s+/g, ' ').trim();
-          return {
-            name: speech.agent,
-            text: source,
-            initial: source.length > 20 ? `${source.slice(0, 20)}…` : source,
-          };
-        });
-    },
-
     recordVisibleRounds() {
       let rounds = [...this.rounds];
       if (this.recordRoundFilter) {
@@ -1089,7 +1057,8 @@ Vue.createApp({
     },
 
     parallelVisible() {
-      return this.speechMode === 'parallel_buffered'
+      return !this.tiebreakActive
+        && this.speechMode === 'parallel_buffered'
         && this.parallelRows.length > 0
         && this.parallelRound === this.currentRound;
     },
@@ -1104,6 +1073,10 @@ Vue.createApp({
       return this.parallelRows.map((row, index) => {
         const speech = speeches.get(row.name);
         const participant = this.participants.find((item) => item.name === row.name);
+        const stanceValue = speech?.stance ?? row.stance;
+        const stance = stanceValue == null || stanceValue === ''
+          ? null
+          : Number.isFinite(Number(stanceValue)) ? Number(stanceValue) : null;
         return {
           ...row,
           index: index + 1,
@@ -1112,9 +1085,7 @@ Vue.createApp({
           model: participant?.label || '',
           text: speech?.text || row.text || '',
           elapsed: Number(speech?.elapsed ?? row.elapsed ?? 0),
-          stance: Number.isFinite(Number(speech?.stance ?? row.stance))
-            ? Number(speech?.stance ?? row.stance)
-            : null,
+          stance,
           error: speech?.error || row.error || '',
           startedAt: row.startedAt || 0,
           waitSeconds: Number(row.waitSeconds || 0),
@@ -1422,6 +1393,51 @@ Vue.createApp({
       return Math.max(0.04, Math.min(1, chars / 2000));
     },
 
+    clearParallelChunks() {
+      this._parallelChunkBuffer = Object.create(null);
+      if (this._parallelFlushFrame) {
+        window.cancelAnimationFrame(this._parallelFlushFrame);
+        this._parallelFlushFrame = 0;
+      }
+    },
+
+    scheduleParallelFlush() {
+      if (this._parallelFlushFrame) return;
+      this._parallelFlushFrame = window.requestAnimationFrame(() => this.flushParallelChunks());
+    },
+
+    flushParallelChunks() {
+      this._parallelFlushFrame = 0;
+      const buffer = this._parallelChunkBuffer || {};
+      this._parallelChunkBuffer = Object.create(null);
+      let changed = false;
+      for (const [name, chunk] of Object.entries(buffer)) {
+        const row = this.parallelRows.find((item) => item.name === name);
+        if (!row || !chunk) continue;
+        row.text = `${row.text || ''}${chunk}`.slice(-16000);
+        changed = true;
+      }
+      if (changed) {
+        this.parallelRows = [...this.parallelRows];
+        this.activeStage = '并行实时输出中';
+        this.liveLabel = `第 ${this.parallelRound} 轮 · ${
+          this.parallelRows.filter((row) => row.text && !row.done).length
+        } 位正在实时输出`;
+        this.$nextTick(this.scrollLiveOutput);
+      }
+    },
+
+    scrollLiveOutput() {
+      const grid = this.$refs.parallelGrid;
+      if (grid) {
+        grid.querySelectorAll('.parallel-paper__body').forEach((body) => {
+          body.scrollTop = body.scrollHeight;
+        });
+      }
+      const projection = this.$refs.projectionPanel?.querySelector('.projection__body');
+      if (projection) projection.scrollTop = projection.scrollHeight;
+    },
+
     parallelElapsed(row) {
       const started = Number(row.startedAt || 0);
       if (!started) return Number(row.waitSeconds || 0);
@@ -1440,8 +1456,11 @@ Vue.createApp({
 
     parallelRowState(row) {
       if (row.error) return '调用失败';
-      if (row.text) return '已展开';
-      if (row.done) return '待公开';
+      if (row.done) return '已完成';
+      if (row.text) {
+        const elapsed = this.parallelElapsed(row);
+        return elapsed > 0 ? `实时输出 ${elapsed}s` : '实时输出中';
+      }
       return `思考中 ${this.parallelElapsed(row)}s`;
     },
 
@@ -1455,7 +1474,11 @@ Vue.createApp({
       }
       return blocks.map((block) => ({
         ...block,
-        marker: block.kind === 'view' ? '【观点】' : block.kind === 'critique' ? '【点评】' : '',
+        marker: block.kind === 'view'
+          ? '【观点】'
+          : block.kind === 'critique'
+            ? '【点评】'
+            : block.kind === 'claim' ? '【主张】' : '',
       }));
     },
 
@@ -2002,6 +2025,7 @@ Vue.createApp({
       this.parallelRows = [];
       this.parallelRound = 0;
       this.parallelReplayNote = false;
+      this.clearParallelChunks();
       this.claims = [];
       this.roundScores = {};
       this.stopArmed = false;
@@ -2162,12 +2186,19 @@ Vue.createApp({
       push({ kind: 'round_start', no: 1, alive: names.length, order: names }, 600);
 
       let at = 900;
-      // 第一轮：并行生成，只报字数不报内容。
+      // 第一轮：并行生成，用假流式文本验证实时卡片，不请求模型。
       push({ kind: 'parallel_start', round_no: 1, agents: names, order: names }, at);
       names.forEach((name, index) => {
+        const preview = `${DEMO_VIEW}\n【主张】${DEMO_CLAIMS[index % DEMO_CLAIMS.length]}`;
         push({ kind: 'thinking', agent: name, role: '独立发言' }, at);
         at += 80;
-        push({ kind: 'parallel_progress', round_no: 1, agent: name, chars: 900 + index * 320 }, at);
+        push({
+          kind: 'parallel_progress',
+          round_no: 1,
+          agent: name,
+          chars: preview.length,
+          text: preview,
+        }, at);
         at += 260;
       });
       names.forEach((name, index) => {
@@ -2474,6 +2505,7 @@ Vue.createApp({
           this.parallelRows = [];
           this.parallelRound = 0;
           this.parallelReplayNote = false;
+          this.clearParallelChunks();
           this.participants = (ev.agents || []).map((a) => ({
             name: a.name,
             label: a.label,
@@ -2520,6 +2552,7 @@ Vue.createApp({
           this.parallelRows = [];
           this.parallelRound = 0;
           this.parallelReplayNote = false;
+          this.clearParallelChunks();
           this.tiebreakState = null;
           round.alive = ev.alive;
           round.order = ev.order || [];
@@ -2612,6 +2645,7 @@ Vue.createApp({
               done: true,
             });
             this.parallelRows = [...this.parallelRows];
+            this.$nextTick(this.scrollLiveOutput);
           }
           if (Number.isFinite(ev.stance)) {
             this.stances = { ...this.stances, [ev.agent]: ev.stance };
@@ -2815,6 +2849,7 @@ Vue.createApp({
 
         case 'parallel_start': {
           this.parallelRound = ev.round_no || this.currentRound || 1;
+          this.clearParallelChunks();
           this.parallelRows = (ev.agents || []).map((name) => ({
             name, chars: 0, done: false, text: '', elapsed: 0, stance: null, error: '',
             startedAt: Date.now(), waitSeconds: 0,
@@ -2827,11 +2862,22 @@ Vue.createApp({
 
         case 'parallel_progress': {
           const row = this.parallelRows.find((item) => item.name === ev.agent);
-          if (row) row.chars = Number(ev.chars || 0);
+          const chunk = String(ev.text || ev.delta || '');
+          if (row) {
+            row.chars = Number(ev.chars || row.chars || 0);
+            if (chunk) {
+              if (!this._parallelChunkBuffer) this._parallelChunkBuffer = Object.create(null);
+              this._parallelChunkBuffer[ev.agent] = `${
+                this._parallelChunkBuffer[ev.agent] || ''
+              }${chunk}`.slice(-16000);
+              this.scheduleParallelFlush();
+            }
+          }
           break;
         }
 
         case 'parallel_done': {
+          this.flushParallelChunks();
           const row = this.parallelRows.find((item) => item.name === ev.agent);
           if (row) {
             row.done = true;
@@ -3146,17 +3192,16 @@ Vue.createApp({
     speechBlocks(text) {
       // 立场标记是元信息，不属于发言正文。
       const raw = String(text || '').replace(/【立场】\s*[+-]?\d{1,3}\s*/g, '');
-      const critique = raw.match(/【点评】([\s\S]*?)(?=【观点】|$)/);
-      const view = raw.match(/【观点】([\s\S]*)/);
-      const blocks = [];
-      if (critique && critique[1].trim()) {
-        blocks.push({ kind: 'critique', text: critique[1].trim() });
-      }
-      if (view && view[1].trim()) {
-        blocks.push({ kind: 'view', text: view[1].trim() });
-      }
-      if (!blocks.length) blocks.push({ kind: 'plain', text: raw });
-      return blocks;
+      const markers = [...raw.matchAll(/【(点评|观点|主张)】/g)];
+      if (!markers.length) return [{ kind: 'plain', text: raw }];
+      return markers
+        .map((marker, index) => ({
+          kind: marker[1] === '点评' ? 'critique' : marker[1] === '观点' ? 'view' : 'claim',
+          text: raw
+            .slice(marker.index + marker[0].length, markers[index + 1]?.index ?? raw.length)
+            .trim(),
+        }))
+        .filter((block) => block.text);
     },
 
     finalBlocks(text) {
