@@ -13,8 +13,31 @@ from apps.arena.moderator import (
     Speech,
     Vote,
     _prior_speeches_for,
+    extract_critiques_for,
+    extract_stance,
+    extract_view,
+    parse_ballot,
+    parse_claims,
 )
 from apps.arena import prompts
+
+
+class StanceTest(unittest.TestCase):
+    def test_parses_signed_stance_marker(self) -> None:
+        self.assertEqual(extract_stance("【立场】+37\n【观点】支持"), 37)
+        self.assertEqual(extract_stance("【立场】-82\n【观点】反对"), -82)
+
+    def test_missing_or_malformed_stance_is_none(self) -> None:
+        self.assertIsNone(extract_stance("【观点】没有立场标记"))
+        self.assertIsNone(extract_stance("【立场】abc"))
+
+    def test_stance_is_clamped_to_range(self) -> None:
+        self.assertEqual(extract_stance("【立场】999"), 100)
+        self.assertEqual(extract_stance("【立场】-999"), -100)
+
+    def test_stance_marker_is_stripped_from_view_text(self) -> None:
+        view = extract_view("【立场】+40\n【观点】增长可以复制")
+        self.assertEqual(view, "增长可以复制")
 
 
 class DecideVoteTest(unittest.TestCase):
@@ -54,7 +77,7 @@ class DecideVoteTest(unittest.TestCase):
 
 
 class TiebreakVoteTest(unittest.TestCase):
-    def test_tiebreak_revotes_then_reduces_voters_until_unique(self) -> None:
+    def test_tiebreak_is_resolved_without_random_voter_removal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             sink = RecordingSink()
             arena = Arena(
@@ -84,14 +107,14 @@ class TiebreakVoteTest(unittest.TestCase):
                     "_ask_with_progress",
                     return_value=CallResult(text="【观点】加赛补充论证", elapsed=0),
                 ),
-                patch("apps.arena.moderator.random.choice", return_value=a),
             ):
                 out, _, tiebreak = arena._resolve_vote(
                     [a, b], [a, b], record, [], 2
                 )
 
-        self.assertIs(out, a)
-        self.assertIn("随机移出投票人", tiebreak)
+        # 加赛仍然平票 → 走三级确定性裁决，绝不随机移出投票人。
+        self.assertIsNotNone(out)
+        self.assertNotIn("随机移出投票人", tiebreak or "")
         self.assertEqual(len([s for s in record.speeches if s.role == "平票加赛"]), 2)
         self.assertTrue(any(v.stage.startswith("tiebreak") for v in record.votes))
         self.assertTrue(any(event["kind"] == "tiebreak" for event in sink.events))
@@ -137,18 +160,16 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
         self.assertNotIn("【点评】", prompt)
         self.assertIn("看不到其他模型本轮的发言", prompt)
 
-    def test_later_round_summarizes_prior_rounds_and_focuses_on_new_view(self) -> None:
+    def test_later_round_only_sees_last_round_and_asks_for_a_response(self) -> None:
         prompt = self.build(2, [("模型A", "上一轮观点"), ("模型B", "另一个上一轮观点")])
 
-        self.assertIn("【前几轮完整发言】", prompt)
+        self.assertIn("【上一轮发言】", prompt)
+        self.assertNotIn("【前几轮完整发言】", prompt)
         self.assertIn("上一轮观点", prompt)
         self.assertIn("另一个上一轮观点", prompt)
-        self.assertIn("回答最好的一个模型", prompt)
-        self.assertIn("回答最差的一个模型", prompt)
-        self.assertIn("最好和最差不能是同一个模型", prompt)
-        self.assertIn("已出局模型不再参与点评比较", prompt)
-        self.assertIn("不要逐个模型点评", prompt)
-        self.assertIn("主要篇幅放在你自己的新观点", prompt)
+        self.assertIn("点名回应其中一条", prompt)
+        self.assertIn("接受还是反驳", prompt)
+        self.assertIn("【主张】", prompt)
         self.assertNotIn("本轮已有发言", prompt)
 
     def test_prior_speeches_exclude_eliminated_models(self) -> None:
@@ -205,9 +226,183 @@ class TournamentScheduleTest(unittest.TestCase):
         self.assertTrue(result.rounds[1].votes)
         self.assertIsNotNone(result.rounds[1].eliminated)
         voting_rounds = [
-            event["round_no"] for event in sink.events if event["kind"] == "voting_start"
+            event["round_no"]
+            for event in sink.events
+            if event["kind"] == "voting_start" and event.get("stage") == "main"
         ]
         self.assertEqual(voting_rounds, [2, 3])
+
+
+class ClaimParsingTest(unittest.TestCase):
+    def test_parses_claim_tag(self) -> None:
+        text = "【观点】一些观点\n【主张】先收定金再交付，不要免费定制"
+        self.assertEqual(parse_claims(text), ["先收定金再交付，不要免费定制"])
+
+    def test_falls_back_to_first_sentence_of_view(self) -> None:
+        text = "【观点】先收定金再交付。其他内容。"
+        self.assertEqual(parse_claims(text), ["先收定金再交付"])
+
+    def test_ledger_records_author_and_round(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            arena = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+            )
+            entries = arena._add_claims("a", "【主张】先做最小闭环", 2, 30)
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["author"], "a")
+        self.assertEqual(entries[0]["round"], 2)
+        self.assertEqual(entries[0]["final_status"], "dormant")
+
+
+class BallotParsingTest(unittest.TestCase):
+    def test_parses_multidimensional_scores(self) -> None:
+        text = (
+            '{"scores": {"模型B": {"论证": 8, "证据": 5, "可执行": 7, "增量": 9}}, '
+            '"vote": "模型B", "reason": "证据链更完整"}'
+        )
+        target, reason, scores = parse_ballot(text, ["模型A", "模型B"], "模型A")
+
+        self.assertEqual(target, "模型B")
+        self.assertEqual(reason, "证据链更完整")
+        self.assertEqual(scores["模型B"]["论证"], 8)
+
+    def test_falls_back_to_legacy_schema(self) -> None:
+        target, reason, scores = parse_ballot(
+            '{"vote": "模型B", "reason": "缺少证据"}', ["模型A", "模型B"], "模型A"
+        )
+
+        self.assertEqual(target, "模型B")
+        self.assertEqual(reason, "缺少证据")
+        self.assertEqual(scores, {})
+
+    def test_reason_is_kept_up_to_200_chars(self) -> None:
+        long_reason = "理" * 300
+        _, reason, _ = parse_ballot(
+            '{"vote": "模型B", "reason": "' + long_reason + '"}',
+            ["模型A", "模型B"],
+            "模型A",
+        )
+
+        self.assertEqual(len(reason), 200)
+
+
+class WeightedVoteTest(unittest.TestCase):
+    def make_arena(self) -> Arena:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Arena(
+            [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+            ArenaConfig(proposition="test", out_dir=Path(tmp.name)),
+        )
+
+    def test_judge_votes_count_half(self) -> None:
+        arena = self.make_arena()
+        votes = [
+            Vote(2, "a", "b", weight=1.0),
+            Vote(2, "judge", "b", weight=0.5, is_judge=True),
+        ]
+
+        counts = arena._weighted_counts(votes)
+
+        self.assertEqual(counts["b"], 1.5)
+
+    def test_judge_weight_drops_to_zero_with_two_alive(self) -> None:
+        arena = self.make_arena()
+
+        self.assertEqual(arena._judge_weight_for(3), 0.5)
+        self.assertEqual(arena._judge_weight_for(2), 0.0)
+
+
+class ConvergenceTest(unittest.TestCase):
+    def test_converged_stances_stop_the_match_early(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            arena = Arena(
+                [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+                sink=sink,
+            )
+            a, b, c = arena.agents
+            record = RoundRecord(no=1, order=[a.name, b.name, c.name])
+            record.speeches = [
+                Speech(1, a.name, "独立发言", "", 0, None, 10),
+                Speech(1, b.name, "独立发言", "", 0, None, 12),
+                Speech(1, c.name, "独立发言", "", 0, None, 8),
+            ]
+            spread = arena._stance_spread(arena.agents, record)
+
+        self.assertEqual(spread, 4)
+        self.assertLessEqual(spread, 25)
+
+
+class StanceSpreadTest(unittest.TestCase):
+    def test_spread_is_max_minus_min(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            arena = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+            )
+            a, b = arena.agents
+            record = RoundRecord(no=1, order=[a.name, b.name])
+            record.speeches = [
+                Speech(1, a.name, "独立发言", "", 0, None, 40),
+                Speech(1, b.name, "独立发言", "", 0, None, -10),
+            ]
+
+            spread = arena._stance_spread(arena.agents, record)
+
+        self.assertEqual(spread, 50)
+
+
+class CritiqueExtractionTest(unittest.TestCase):
+    def test_picks_up_comments_naming_the_model(self) -> None:
+        speeches = [
+            Speech(1, "模型A", "独立发言", "【点评】模型B 的证据链有缺口", 0),
+            Speech(1, "模型B", "独立发言", "【点评】模型A 的结论过于笼统", 0),
+        ]
+        votes = [Vote(1, "模型C", "模型B", reason="模型B 的方案不可验收")]
+
+        critiques = extract_critiques_for("模型B", speeches, votes)
+
+        self.assertEqual(len(critiques), 2)
+        self.assertTrue(any("模型A" in c for c in critiques))
+        self.assertTrue(any("模型C" in c for c in critiques))
+
+
+class ParallelSpeechTest(unittest.TestCase):
+    def test_parallel_mode_emits_parallel_events_and_keeps_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            result = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(
+                    proposition="test",
+                    out_dir=Path(tmp),
+                    speech_mode="parallel_buffered",
+                ),
+                sink=sink,
+            ).run()
+
+        kinds = [event["kind"] for event in sink.events]
+        self.assertIn("parallel_start", kinds)
+        self.assertIn("parallel_done", kinds)
+        self.assertIn("parallel_replay", kinds)
+        self.assertEqual([s.agent for s in result.rounds[0].speeches], result.rounds[0].order)
+
+    def test_transcript_has_claims_and_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Arena(
+                [MockAgent("a"), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+            ).run()
+
+        data = result.to_dict()
+        self.assertEqual(data["schema_version"], 2)
+        self.assertTrue(data["claims"])
+        self.assertIn("calls", data["budget"])
+        self.assertIn("weight_breakdown", data["rounds"][1])
 
 
 if __name__ == "__main__":

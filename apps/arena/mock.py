@@ -118,21 +118,48 @@ class MockAgent:
             f"我的判断是：{self.rng.choice(_JUDGEMENT)}。"
             f"{self.rng.choice(_ACTION)}"
         )
+        claim = self.rng.choice([
+            "先把单点闭环跑通，再谈规模",
+            "留存比拉新更能决定单位经济模型",
+            "投入结构决定项目能不能活过验证期",
+        ])
+        # 立场按名字确定（不是随机的）：同一输入重跑结果一致，也避免随机触发收敛收束。
+        # 名字序号错开，避免同一场的几个 mock 恰好收敛到一起。
+        index = sum(ord(ch) for ch in self.name) % 7
+        stance = -60 + index * 20 + (round(self.rng.random()) % 5)
         if round_one:
-            return f"【观点】{view}"
+            return f"【立场】{stance}\n【观点】{view}\n【主张】{claim}"
         summary = (
             f"此前讨论{self.rng.choice(_CRITIQUE_GOOD)}，"
             f"但{self.rng.choice(_CRITIQUE_BAD)}"
         )
-        return f"【点评】{summary}。\n【观点】{view}"
+        return f"【立场】{stance}\n【点评】{summary}。\n【观点】{view}\n【主张】{claim}"
 
     def _vote(self, prompt: str) -> str:
         m = re.search(r"【(?:本轮)?存活参赛者】(.*)", prompt)
         names: Sequence[str] = [x.strip() for x in m.group(1).split(",")] if m else []
         candidates = [n for n in names if n != self.name]
         target = self.rng.choice(candidates) if candidates else (names[0] if names else "unknown")
+        scores = {
+            name: {
+                "论证": self.rng.randint(4, 9),
+                "证据": self.rng.randint(4, 9),
+                "可执行": self.rng.randint(4, 9),
+                "增量": self.rng.randint(4, 9),
+            }
+            for name in candidates
+        }
         return json.dumps(
-            {"vote": target, "reason": self.rng.choice(["论证空泛", "与共识重复", "缺少可执行方案", "回避了核心矛盾"])},
+            {
+                "scores": scores,
+                "vote": target,
+                "reason": self.rng.choice([
+                    "论证空泛，全是通用商业逻辑，没有可验证的数据来源",
+                    "与上一轮共识实质重复，没有推进命题的新增量",
+                    "缺少可执行方案，落地路径和成本都没有交代",
+                    "回避了核心矛盾，把风险推给了不存在的未来",
+                ]),
+            },
             ensure_ascii=False,
         )
 
@@ -142,5 +169,7 @@ class MockAgent:
             "【论据】1. 现有案例证明单点闭环是可行的最低成本路径。\n"
             "2. 成本结构的改善依赖订单密度，而非技术升级。\n"
             "3. 主要风险在执行节奏，而非方向本身。\n"
-            "【行动】先用两周做可关闭的最小验证；设定明确止损线；拿到真实数据后再决定加注。"
+            "【行动】先用两周做可关闭的最小验证；设定明确止损线；拿到真实数据后再决定加注。\n"
+            "【保留的分歧】小码提出：未被及时跟进的询盘不等于可回收收入，这个分歧未被采纳也未被证伪。\n"
+            "【失效条件】如果首批客户无法在两周内产生可验收结果，这个结论不成立。"
         )

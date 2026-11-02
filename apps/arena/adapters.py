@@ -350,6 +350,7 @@ class CallResult:
     text: str = ""
     elapsed: float = 0.0
     error: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 def clean_output(text: str) -> str:

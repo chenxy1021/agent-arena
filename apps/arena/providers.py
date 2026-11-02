@@ -37,7 +37,11 @@ def _delta_text(payload: dict) -> tuple[str, str]:
     return str(reasoning), str(content)
 
 
-def _read_stream(lines: Iterable[bytes | str], on_output: OutputCallback | None) -> str:
+def _read_stream(
+    lines: Iterable[bytes | str],
+    on_output: OutputCallback | None,
+    usage: dict[str, int] | None = None,
+) -> str:
     reasoning_parts: list[str] = []
     content_parts: list[str] = []
     for raw_line in lines:
@@ -61,7 +65,20 @@ def _read_stream(lines: Iterable[bytes | str], on_output: OutputCallback | None)
             content_parts.append(content)
             if on_output:
                 on_output(content)
+        if usage is not None:
+            _collect_usage(payload, usage)
     return "".join(content_parts) or "".join(reasoning_parts)
+
+
+def _collect_usage(payload: dict, usage: dict[str, int]) -> None:
+    """把流式响应里的 usage 字段累加进 usage（部分服务商只在最后一帧返回）。"""
+    raw = payload.get("usage")
+    if not isinstance(raw, dict):
+        return
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = raw.get(key)
+        if isinstance(value, (int, float)):
+            usage[key] = max(usage.get(key, 0), int(value))
 
 
 def _error_message(error: HTTPError) -> str:
@@ -89,6 +106,7 @@ class ApiModelAgent:
         model: str,
         system_prompt: str = "",
         temperature: float | None = None,
+        persona: str = "",
     ):
         self.config_id = config_id
         self.name = name
@@ -97,6 +115,7 @@ class ApiModelAgent:
         self.model = model
         self.system_prompt = system_prompt.strip()
         self.temperature = temperature
+        self.persona = (persona or "").strip()
         self.spec = SimpleNamespace(key=name, label=model, note="OpenAI-compatible API")
         self.version = model
         self.path = completions_url(base_url)
@@ -120,8 +139,13 @@ class ApiModelAgent:
         for _ in range(retries + 1):
             started = time.monotonic()
             try:
-                text = self._invoke(prompt, timeout, on_output)
-                return CallResult(text=text.strip(), elapsed=time.monotonic() - started)
+                usage: dict[str, int] = {}
+                text = self._invoke(prompt, timeout, on_output, usage)
+                return CallResult(
+                    text=text.strip(),
+                    elapsed=time.monotonic() - started,
+                    usage=usage,
+                )
             except HTTPError as exc:
                 last_error = f"API {exc.code}：{_error_message(exc)}"
                 if exc.code < 500 and exc.code != 429:
@@ -135,7 +159,11 @@ class ApiModelAgent:
         return CallResult(error=last_error or "未知错误")
 
     def _invoke(
-        self, prompt: str, timeout: float, on_output: OutputCallback | None
+        self,
+        prompt: str,
+        timeout: float,
+        on_output: OutputCallback | None,
+        usage: dict[str, int] | None = None,
     ) -> str:
         messages: list[dict[str, str]] = []
         if self.system_prompt:
@@ -163,14 +191,16 @@ class ApiModelAgent:
         with urlopen(request, timeout=timeout) as response:
             content_type = response.headers.get("Content-Type", "")
             if "text/event-stream" in content_type:
-                return _read_stream(response, on_output)
+                return _read_stream(response, on_output, usage)
             raw = response.read().decode("utf-8", errors="replace")
 
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            return _read_stream(raw.splitlines(), on_output)
+            return _read_stream(raw.splitlines(), on_output, usage)
         reasoning, content = _delta_text(payload)
+        if usage is not None:
+            _collect_usage(payload, usage)
         text = content or reasoning
         if text and on_output:
             on_output(text)

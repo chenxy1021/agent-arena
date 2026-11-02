@@ -15,10 +15,16 @@ from config import settings
 
 from . import database
 from .providers import ApiModelAgent, suggest_display_name
-from .schemas import ModelCreate, ModelNameRequest, ModelUpdate, StartRun
+from .schemas import PERSONA_KEYS, ModelCreate, ModelNameRequest, ModelUpdate, StartRun
 from .services import manager
 
 router = APIRouter()
+
+
+def _persona(value: str) -> str:
+    """人格只接受预设值；空串表示不分配。"""
+    value = (value or "").strip()
+    return value if value in PERSONA_KEYS else ""
 
 
 @router.get("/health")
@@ -48,6 +54,7 @@ def create_model(payload: ModelCreate) -> dict[str, Any]:
         model=model,
         system_prompt=payload.system_prompt.strip(),
         temperature=payload.temperature,
+        persona=_persona(payload.persona),
     )
     config.pop("api_key", None)
     config["has_api_key"] = True
@@ -79,6 +86,7 @@ def update_model(model_id: int, payload: ModelUpdate) -> dict[str, Any]:
         model=model,
         system_prompt=payload.system_prompt.strip(),
         temperature=payload.temperature,
+        persona=_persona(payload.persona),
     )
     if not config:
         raise HTTPException(status_code=404, detail="模型配置不存在")
@@ -126,6 +134,13 @@ def start_run(payload: StartRun) -> dict[str, str]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"run": run.id}
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_run(run_id: str) -> dict[str, Any]:
+    if not manager.cancel(run_id):
+        raise HTTPException(status_code=404, detail="run not running")
+    return {"stopped": True}
 
 
 @router.get("/runs/active")
@@ -185,6 +200,7 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
             for round_record in transcript.get("rounds") or []
             if isinstance(round_record, dict) and round_record.get("eliminated")
         ]
+        run["round_count"] = len(transcript.get("rounds") or [])
     return {"runs": runs}
 
 

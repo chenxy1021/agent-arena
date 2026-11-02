@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS model_configs (
     model TEXT NOT NULL,
     system_prompt TEXT NOT NULL DEFAULT '',
     temperature REAL,
+    persona TEXT NOT NULL DEFAULT '',
     created_ts REAL NOT NULL,
     updated_ts REAL NOT NULL
 );
@@ -57,6 +58,10 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        # 老库补列：persona 是 v2 新增字段。
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(model_configs)")}
+        if "persona" not in columns:
+            conn.execute("ALTER TABLE model_configs ADD COLUMN persona TEXT NOT NULL DEFAULT ''")
 
 
 def create_model(
@@ -67,6 +72,7 @@ def create_model(
     model: str,
     system_prompt: str = "",
     temperature: float | None = None,
+    persona: str = "",
     db_path: Path | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
@@ -75,10 +81,11 @@ def create_model(
         cursor = conn.execute(
             """
             INSERT INTO model_configs
-                (name, base_url, api_key, model, system_prompt, temperature, created_ts, updated_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (name, base_url, api_key, model, system_prompt, temperature, persona,
+                 created_ts, updated_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, base_url, api_key, model, system_prompt, temperature, now, now),
+            (name, base_url, api_key, model, system_prompt, temperature, persona, now, now),
         )
         model_id = int(cursor.lastrowid)
     return get_model(model_id, db_path=db_path) or {}
@@ -89,7 +96,7 @@ def list_models(db_path: Path | None = None) -> list[dict[str, Any]]:
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT id, name, base_url, model, system_prompt, temperature,
+            SELECT id, name, base_url, model, system_prompt, temperature, persona,
                    created_ts, updated_ts, 1 AS has_api_key
             FROM model_configs
             ORDER BY created_ts DESC, id DESC
@@ -114,6 +121,7 @@ def update_model(
     model: str,
     system_prompt: str = "",
     temperature: float | None = None,
+    persona: str = "",
     db_path: Path | None = None,
 ) -> dict[str, Any] | None:
     current = get_model(model_id, db_path=db_path)
@@ -124,7 +132,7 @@ def update_model(
             """
             UPDATE model_configs
             SET name = ?, base_url = ?, api_key = ?, model = ?,
-                system_prompt = ?, temperature = ?, updated_ts = ?
+                system_prompt = ?, temperature = ?, persona = ?, updated_ts = ?
             WHERE id = ?
             """,
             (
@@ -134,6 +142,7 @@ def update_model(
                 model,
                 system_prompt,
                 temperature,
+                persona,
                 time.time(),
                 model_id,
             ),
@@ -218,6 +227,16 @@ def get_run(run_id: str, db_path: Path | None = None) -> dict[str, Any] | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     return dict(row) if row else None
+
+
+def mark_stale_runs_interrupted(db_path: Path | None = None) -> int:
+    """服务启动时把陈旧的 running 记录刷成 interrupted，避免被当成进行中接回来。"""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE runs SET status = 'interrupted' WHERE status = 'running'"
+        )
+        return cursor.rowcount
 
 
 def sync_run_history(runs_dir: Path | None = None, db_path: Path | None = None) -> None:

@@ -33,13 +33,25 @@ def _md(result: ArenaResult) -> str:
     add(f"- **开始时间**：{result.started_at}")
     add(f"- **耗时**：{result.duration}s")
     add(f"- **参赛者**：{', '.join(p['name'] for p in result.participants)}")
-    add(f"- **最终存活**：{result.winner or '（无）'}\n")
+    add(f"- **最终存活**：{result.winner or '（无）'}")
+    add(f"- **发言方式**：{result.speech_mode}")
+    if result.converged:
+        add("- **收束**：立场收敛，提前结束")
+    if result.stop_reason:
+        add(f"- **中止原因**：{result.stop_reason}")
+    budget = result.budget or {}
+    if budget:
+        add(
+            f"- **成本**：{budget.get('calls', 0)} 次调用 · 约 {budget.get('tokens_estimate', 0)} tokens"
+        )
+    add("")
 
     add("## 参赛阵容\n")
-    add("| 名字 | CLI | 路径 |")
-    add("| --- | --- | --- |")
+    add("| 名字 | CLI | 人格 | 路径 |")
+    add("| --- | --- | --- | --- |")
     for p in result.participants:
-        add(f"| `{p['name']}` | {p['label']} | `{p['path']}` |")
+        persona = p.get("persona") or "无"
+        add(f"| `{p['name']}` | {p['label']} | {persona} | `{p['path']}` |")
     add("")
 
     for r in result.rounds:
@@ -62,8 +74,30 @@ def _md(result: ArenaResult) -> str:
                 add(f"| {who} | {v.target or '弃权'} | {(v.reason or v.error or '').replace('|', '/')} |")
             add("")
             if r.counts:
-                summary = "，".join(f"{k} {n} 票" for k, n in sorted(r.counts.items(), key=lambda x: -x[1]))
+                summary = "，".join(f"{k} {n:g} 票" for k, n in sorted(r.counts.items(), key=lambda x: -x[1]))
                 add(f"计票：{summary}\n")
+            breakdown = r.weight_breakdown or {}
+            if breakdown:
+                add(
+                    f"票权分布：存活者 {breakdown.get('alive_votes', 0)} 票（权重 1.0）"
+                    f" · 评审 {breakdown.get('judge_votes', 0)} 票"
+                    f"（权重 {breakdown.get('judge_weight', 0.5)}）\n"
+                )
+            if r.scores:
+                add("### 评分矩阵\n")
+                dims = sorted({d for dims in r.scores.values() for d in dims})
+                add("| 模型 | " + " | ".join(dims) + " | 均分 |")
+                add("| --- | " + " | ".join("---" for _ in dims) + " | --- |")
+                for name, dims_map in sorted(
+                    r.scores.items(),
+                    key=lambda item: -(sum(item[1].values()) / max(1, len(item[1]))),
+                ):
+                    avg = sum(dims_map.values()) / max(1, len(dims_map))
+                    cells = " | ".join(f"{dims_map.get(d, '—')}" for d in dims)
+                    add(f"| {name} | {cells} | {avg:.1f} |")
+                add("")
+            if r.stance_spread is not None:
+                add(f"立场离散度：{r.stance_spread}\n")
 
         if r.exits:
             for e in r.exits:
@@ -71,6 +105,18 @@ def _md(result: ArenaResult) -> str:
         if r.eliminated:
             tb = f"（{r.tiebreak}）" if r.tiebreak else ""
             add(f"### 淘汰：{r.eliminated} {r.votes_received} 票{tb}\n")
+
+    if result.claims:
+        add("## 主张存活表\n")
+        add("| # | 主张 | 提出者 | 提出轮 | 被谁挑战 | 结局 |")
+        add("| --- | --- | --- | --- | --- | --- |")
+        for c in result.claims:
+            challengers = "、".join(c.get("challengers") or []) or "—"
+            add(
+                f"| {c.get('claim_id')} | {c.get('text')} | {c.get('author')} | "
+                f"{c.get('round')} | {challengers} | {c.get('final_status')} |"
+            )
+        add("")
 
     if result.final_answer:
         add("## 最终结论\n")

@@ -26,6 +26,7 @@ class RunState:
         self.run_dir = ""
         self.started_ts = time.time()
         self.sink = RecordingSink()
+        self.cancel_event = threading.Event()
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -51,6 +52,15 @@ class Manager:
         with self.lock:
             return next((run for run in self.runs.values() if run.status == "running"), None)
 
+    def cancel(self, run_id: str) -> bool:
+        """请求中止一场比赛；实际停止由赛制层在下一个检查点完成。"""
+        with self.lock:
+            run = self.runs.get(run_id)
+            if not run or run.status != "running":
+                return False
+            run.cancel_event.set()
+            return True
+
     def start(self, payload: StartRun) -> RunState:
         proposition = payload.proposition.strip()
         if not proposition:
@@ -74,6 +84,7 @@ class Manager:
                     model=str(config["model"]),
                     system_prompt=str(config.get("system_prompt") or ""),
                     temperature=config.get("temperature"),
+                    persona=str(config.get("persona") or ""),
                 )
             )
         if len(agents) < 2:
@@ -81,6 +92,7 @@ class Manager:
 
         run_id = uuid.uuid4().hex[:12]
         run = RunState(run_id, proposition)
+        arena_holder: dict[str, Arena] = {}
         started_at = time.strftime("%Y-%m-%d %H:%M:%S")
         database.create_run(
             run_id=run_id,
@@ -96,19 +108,27 @@ class Manager:
             timeout=payload.timeout,
             out_dir=settings.RUNS_DIR,
             vote_mode=payload.vote_mode,
+            speech_mode=payload.speech_mode,
+            criteria=list(payload.criteria or []),
+            background=payload.background,
+            constraints=list(payload.constraints or []),
+            max_calls=payload.max_calls,
+            max_wall_clock=float(payload.max_wall_clock or 0),
         )
 
         def worker() -> None:
             try:
                 arena = Arena(agents, cfg, sink=run.sink)
+                arena_holder["arena"] = arena
+                arena.cancel_hook = run.cancel_event
                 run.run_dir = str(arena.run_dir)
                 database.update_run_dir(run_id, run.run_dir)
                 result = arena.run()
                 run.result = result.to_dict()
-                run.status = "done"
+                run.status = "cancelled" if result.stop_reason == "用户中止" else "done"
                 database.finish_run(
                     run_id=run_id,
-                    status="done",
+                    status=run.status,
                     winner=result.winner,
                     duration=result.duration,
                     run_dir=run.run_dir,

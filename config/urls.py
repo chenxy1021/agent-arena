@@ -17,6 +17,7 @@ from config import settings
 async def lifespan(_: FastAPI):
     database.init_db()
     database.sync_run_history()
+    database.mark_stale_runs_interrupted()
     yield
 
 
