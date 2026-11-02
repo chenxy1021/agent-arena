@@ -72,7 +72,6 @@ def create_model(
     model: str,
     system_prompt: str = "",
     temperature: float | None = None,
-    persona: str = "",
     db_path: Path | None = None,
 ) -> dict[str, Any]:
     init_db(db_path)
@@ -81,11 +80,11 @@ def create_model(
         cursor = conn.execute(
             """
             INSERT INTO model_configs
-                (name, base_url, api_key, model, system_prompt, temperature, persona,
+                (name, base_url, api_key, model, system_prompt, temperature,
                  created_ts, updated_ts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, base_url, api_key, model, system_prompt, temperature, persona, now, now),
+            (name, base_url, api_key, model, system_prompt, temperature, now, now),
         )
         model_id = int(cursor.lastrowid)
     return get_model(model_id, db_path=db_path) or {}
@@ -96,7 +95,7 @@ def list_models(db_path: Path | None = None) -> list[dict[str, Any]]:
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT id, name, base_url, model, system_prompt, temperature, persona,
+            SELECT id, name, base_url, model, system_prompt, temperature,
                    created_ts, updated_ts, 1 AS has_api_key
             FROM model_configs
             ORDER BY created_ts DESC, id DESC
@@ -121,7 +120,6 @@ def update_model(
     model: str,
     system_prompt: str = "",
     temperature: float | None = None,
-    persona: str = "",
     db_path: Path | None = None,
 ) -> dict[str, Any] | None:
     current = get_model(model_id, db_path=db_path)
@@ -132,7 +130,7 @@ def update_model(
             """
             UPDATE model_configs
             SET name = ?, base_url = ?, api_key = ?, model = ?,
-                system_prompt = ?, temperature = ?, persona = ?, updated_ts = ?
+                system_prompt = ?, temperature = ?, updated_ts = ?
             WHERE id = ?
             """,
             (
@@ -142,7 +140,6 @@ def update_model(
                 model,
                 system_prompt,
                 temperature,
-                persona,
                 time.time(),
                 model_id,
             ),

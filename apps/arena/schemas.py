@@ -7,9 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-PERSONA_KEYS = ("审计员", "务实派", "反方", "红队", "归纳者")
-
-
 class ModelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     base_url: str = Field(min_length=1, max_length=500)
@@ -17,7 +14,6 @@ class ModelCreate(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     system_prompt: str = Field(default="", max_length=8000)
     temperature: float | None = Field(default=None, ge=0, le=2)
-    persona: str = Field(default="", max_length=20)
 
 
 class ModelUpdate(ModelCreate):

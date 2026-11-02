@@ -48,11 +48,10 @@ def _md(result: ArenaResult) -> str:
     add("")
 
     add("## 参赛阵容\n")
-    add("| 名字 | 模型 | 人格 | 接口 |")
-    add("| --- | --- | --- | --- |")
+    add("| 名字 | 模型 | 接口 |")
+    add("| --- | --- | --- |")
     for p in result.participants:
-        persona = p.get("persona") or "无"
-        add(f"| `{p['name']}` | {p['label']} | {persona} | `{p['path']}` |")
+        add(f"| `{p['name']}` | {p['label']} | `{p['path']}` |")
     add("")
 
     for r in result.rounds:

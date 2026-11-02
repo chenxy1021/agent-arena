@@ -13,16 +13,10 @@ from fastapi.responses import StreamingResponse
 
 from . import database
 from .providers import ApiModelAgent, suggest_display_name
-from .schemas import PERSONA_KEYS, ModelCreate, ModelNameRequest, ModelUpdate, StartRun
+from .schemas import ModelCreate, ModelNameRequest, ModelUpdate, StartRun
 from .services import manager
 
 router = APIRouter()
-
-
-def _persona(value: str) -> str:
-    """人格只接受预设值；空串表示不分配。"""
-    value = (value or "").strip()
-    return value if value in PERSONA_KEYS else ""
 
 
 @router.get("/health")
@@ -52,7 +46,6 @@ def create_model(payload: ModelCreate) -> dict[str, Any]:
         model=model,
         system_prompt=payload.system_prompt.strip(),
         temperature=payload.temperature,
-        persona=_persona(payload.persona),
     )
     config.pop("api_key", None)
     config["has_api_key"] = True
@@ -84,7 +77,6 @@ def update_model(model_id: int, payload: ModelUpdate) -> dict[str, Any]:
         model=model,
         system_prompt=payload.system_prompt.strip(),
         temperature=payload.temperature,
-        persona=_persona(payload.persona),
     )
     if not config:
         raise HTTPException(status_code=404, detail="模型配置不存在")

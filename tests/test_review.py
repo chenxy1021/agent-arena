@@ -19,6 +19,7 @@ class ReviewAgent:
         self.score = score
         self.prompts = []
         self.calls = 0
+        self.break_json = False
 
     def ask(self, prompt, timeout=0, retries=0, on_output=None):
         self.calls += 1
@@ -38,16 +39,20 @@ class ReviewAgent:
                 }
                 for label in labels
             }
-            text = json.dumps(
-                {
-                    "scores": scores,
-                    "ranking": labels,
-                    "recommended": labels[0],
-                    "reasons": {labels[0]: "方案步骤完整，差异明确，可以进入小范围验证。"},
-                    "risks": {labels[0]: "风险在于首轮验证样本不足，需要设置止损线。"},
-                    "rejections": {labels[1]: "方案缺少可验证的止损条件，执行成本也没有上限。"},
-                },
-                ensure_ascii=False,
+            text = (
+                "不是 JSON"
+                if self.break_json
+                else json.dumps(
+                    {
+                        "scores": scores,
+                        "ranking": labels,
+                        "recommended": labels[0],
+                        "reasons": {labels[0]: "方案步骤完整，差异明确，可以进入小范围验证。"},
+                        "risks": {labels[0]: "风险在于首轮验证样本不足，需要设置止损线。"},
+                        "rejections": {labels[1]: "方案缺少可验证的止损条件，执行成本也没有上限。"},
+                    },
+                    ensure_ascii=False,
+                )
             )
             return CallResult(text=text, elapsed=0)
         if "整合建议" in prompt:
@@ -112,6 +117,37 @@ class ReviewArenaTest(unittest.TestCase):
 
         self.assertEqual(plan["name"], "A")
         self.assertIn("风险", missing)
+
+    def test_plan_parser_accepts_markdown_headings(self) -> None:
+        plan, missing = parse_plan(
+            "## 方案名：灰度试点\n### 核心主张：先小后大\n"
+            "**做法步骤**：试点两周\n代价：一周人力\n"
+            "风险：样本偏差\n与主流做法的差异：先验证"
+        )
+
+        self.assertEqual(plan["name"], "灰度试点")
+        self.assertEqual(plan["claim"], "先小后大")
+        self.assertEqual(missing, [])
+
+    def test_judge_failure_degrades_without_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            judge = ReviewAgent("裁判", "裁判", 0)
+            judge.break_json = True
+            sink = RecordingSink()
+            result = ReviewArena(
+                [ReviewAgent("甲", "A", 8), ReviewAgent("乙", "B", 6)],
+                judge,
+                ReviewConfig(proposition="test", out_dir=Path(tmp), run_id="x"),
+                sink=sink,
+            ).run()
+
+        self.assertEqual(result.stop_reason, "评审未完成")
+        self.assertEqual(result.scores, {})
+        self.assertEqual(result.ranking, [])
+        self.assertTrue(result.anomalies)
+        self.assertTrue(any(
+            event["kind"] == "saved" for event in sink.events
+        ))
 
     def test_judge_parser_clamps_scores_and_flags_missing_dimensions(self) -> None:
         parsed, anomalies = parse_judgement(

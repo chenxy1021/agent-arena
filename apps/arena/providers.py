@@ -105,7 +105,6 @@ class ApiModelAgent:
         model: str,
         system_prompt: str = "",
         temperature: float | None = None,
-        persona: str = "",
     ):
         self.config_id = config_id
         self.name = name
@@ -114,7 +113,6 @@ class ApiModelAgent:
         self.model = model
         self.system_prompt = system_prompt.strip()
         self.temperature = temperature
-        self.persona = (persona or "").strip()
         self.version = model
         self.path = completions_url(base_url)
 

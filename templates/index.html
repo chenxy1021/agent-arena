@@ -223,7 +223,7 @@
             </div>
 
         <div class="roster__cols" aria-hidden="true">
-          <span>席位</span><span>形象</span><span>名称</span><span>模型 ID</span><span>人格</span><span>参赛</span><span>操作</span>
+          <span>席位</span><span>形象</span><span>名称</span><span>模型 ID</span><span>参赛</span><span>操作</span>
         </div>
 
         <ul class="roster__rows">
@@ -236,9 +236,6 @@
               :color="agentColor(m.name)" :size="36"></robot-avatar>
             <span class="roster__name">{{ m.name }}</span>
             <span class="roster__model">{{ m.model }}</span>
-            <span class="roster__persona">
-              <span v-if="m.persona" class="persona-tag" :title="'人格只影响发言，不影响投票'">{{ m.persona }}</span>
-            </span>
             <button type="button" class="dot-check" :class="{ on: m.checked }"
               :aria-pressed="m.checked"
               :aria-label="(m.checked ? '取消参赛：' : '加入参赛：') + m.name"
@@ -744,7 +741,7 @@
                   :state="row.text ? 'idle' : row.done ? 'idle' : 'thinking'" :size="30"></robot-avatar>
                 <span>
                   <b>{{ displayName(row.name) }}</b>
-                  <small>{{ row.model }} · {{ row.persona || '无预设人格' }}</small>
+                  <small>{{ row.model }}</small>
                 </span>
                 <em :class="{ live: !row.done }">{{ parallelRowState(row) }}</em>
               </header>
@@ -794,9 +791,6 @@
             </template>
             <span class="projection__role">
               {{ currentPaper ? `${currentPaper.role} · ${agentModel(currentPaper.agent)}` : activeStage }}
-            </span>
-            <span v-if="currentPaper && agentPersona(currentPaper.agent)" class="projection__persona">
-              {{ agentPersona(currentPaper.agent) }}
             </span>
             <span v-if="currentPaper && !currentPaper.final" class="projection__clock">{{ remainingTimeText }}</span>
           </header>
@@ -1265,7 +1259,10 @@
 
       <div v-else-if="filteredHistory.length && archiveMode === 'ledger'" class="archive-grid">
         <article v-for="item in filteredHistory" :key="item.id" class="archive-card"
-          :class="{ current: item.id === viewingHistoryId }">
+          :class="{ current: item.id === viewingHistoryId }"
+          role="button" tabindex="0"
+          @click="loadHistoryRun(item.id)"
+          @keydown.enter.prevent="loadHistoryRun(item.id)">
           <header class="archive-card__head">
             <span class="archive-status" :class="item.status">
               <i aria-hidden="true"></i>{{ historyStatus(item) }}
@@ -1364,19 +1361,6 @@
           <label>模型 ID
             <input v-model.trim="modelForm.model" required maxlength="200" placeholder="例如：gpt-5">
           </label>
-          <div class="persona-picker">
-            <span class="persona-picker__label">辩论人格</span>
-            <div class="persona-picker__chips">
-              <button v-for="option in ['', '审计员', '务实派', '反方', '红队', '归纳者']"
-                :key="'pf-' + option" type="button" class="persona-chip"
-                :class="{ active: modelForm.persona === option }"
-                :aria-pressed="modelForm.persona === option"
-                @click="modelForm.persona = option">
-                {{ option || '无' }}
-              </button>
-            </div>
-            <p class="persona-picker__note">人格只影响发言，不影响投票</p>
-          </div>
           <label>系统提示词（选填）
             <textarea v-model="modelForm.system_prompt" rows="3" placeholder="给模型的额外角色或回答要求"></textarea>
           </label>
@@ -1407,7 +1391,7 @@
           <span class="registry__count">{{ models.length }} 个</span>
         </div>
         <div class="roster__cols" aria-hidden="true">
-          <span>席位</span><span>形象</span><span>名称</span><span>模型 ID</span><span>人格</span><span>参赛</span><span>操作</span>
+          <span>席位</span><span>形象</span><span>名称</span><span>模型 ID</span><span>参赛</span><span>操作</span>
         </div>
         <ul class="roster__rows">
           <li v-for="(m, index) in models" :key="`model-${m.id}`" class="roster__row"
@@ -1417,9 +1401,6 @@
               :color="agentColor(m.name)" :size="36"></robot-avatar>
             <span class="roster__name">{{ m.name }}</span>
             <span class="roster__model">{{ m.model }}</span>
-            <span class="roster__persona">
-              <span v-if="m.persona" class="persona-tag" :title="'人格只影响发言，不影响投票'">{{ m.persona }}</span>
-            </span>
             <button type="button" class="dot-check" :class="{ on: m.checked }" :aria-pressed="m.checked"
               :aria-label="(m.checked ? '取消参赛：' : '加入参赛：') + m.name"
               @click.stop="m.checked = !m.checked"></button>
@@ -1461,19 +1442,6 @@
         <label>模型 ID
           <input v-model.trim="modelForm.model" required maxlength="200" placeholder="例如：gpt-5">
         </label>
-        <div class="persona-picker">
-          <span class="persona-picker__label">辩论人格</span>
-          <div class="persona-picker__chips">
-            <button v-for="option in ['', '审计员', '务实派', '反方', '红队', '归纳者']"
-              :key="'p-' + option" type="button" class="persona-chip"
-              :class="{ active: modelForm.persona === option }"
-              :aria-pressed="modelForm.persona === option"
-              @click="modelForm.persona = option">
-              {{ option || '无' }}
-            </button>
-          </div>
-          <p class="persona-picker__note">人格只影响发言，不影响投票</p>
-        </div>
         <label>系统提示词（选填）
           <textarea v-model="modelForm.system_prompt" rows="3" placeholder="给这个模型的额外角色或回答要求"></textarea>
         </label>

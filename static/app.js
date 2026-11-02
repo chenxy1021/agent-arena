@@ -40,8 +40,6 @@ const DEMO_VOTES = [
   ['DeepSeek', 'Claude', '忽略了执行成本，方案在真实场景里很难推下去'],
 ];
 
-const DEMO_PERSONAS = ['', '审计员', '', '务实派'];
-
 const DEMO_CLAIMS = [
   '先收定金再交付，不要免费定制',
   '效果分成需要可审计的归因口径',
@@ -585,7 +583,6 @@ Vue.createApp({
       stopArmed: false,
       archiveMode: 'ledger',
       compareIds: [],
-      persona: '',
       models: [],
       modelsLoading: true,
       showModelModal: false,
@@ -601,7 +598,6 @@ Vue.createApp({
         model: '',
         system_prompt: '',
         temperature: '',
-        persona: '',
       },
       history: [],
       historyLoading: true,
@@ -1245,7 +1241,6 @@ Vue.createApp({
           ...row,
           index: index + 1,
           role: speech?.role || role,
-          persona: participant?.persona || '',
           model: participant?.label || '',
           text: speech?.text || row.text || '',
           elapsed: Number(speech?.elapsed ?? row.elapsed ?? 0),
@@ -1380,17 +1375,6 @@ Vue.createApp({
       return this.finalSection('【失效条件】');
     },
 
-    personaHint() {
-      const hints = {
-        '': '不分配人格。',
-        审计员: '只挑证据与逻辑漏洞，不给建设性方案。',
-        务实派: '只看落地成本与执行难度。',
-        反方: '强制唱反调，优先反对当前共识。',
-        红队: '攻击当前最强论点，找出它会失效的条件。',
-        归纳者: '只做分歧归纳，不给立场性主张。',
-      };
-      return hints[this.persona] || '';
-    },
   },
 
   mounted() {
@@ -2210,7 +2194,6 @@ Vue.createApp({
               temperature: this.modelForm.temperature === ''
                 ? null
                 : Number(this.modelForm.temperature),
-              persona: this.modelForm.persona || '',
             }),
           },
         );
@@ -2665,7 +2648,6 @@ Vue.createApp({
         agents: names.map((name, index) => ({
           name,
           label: DEMO_MODELS[index].model,
-          persona: DEMO_PERSONAS[index] || '',
         })),
       }, 100);
       push({ kind: 'round_start', no: 1, alive: names.length, order: names }, 600);
@@ -2877,7 +2859,7 @@ Vue.createApp({
       this.mode = transcript.vote_mode;
       this.status = 'done';
       this.participants = transcript.participants.map((p) => ({
-        name: p.name, label: p.label, persona: p.persona || '',
+        name: p.name, label: p.label,
         state: 'alive', lastRole: '', lastElapsed: 0,
       }));
       this.winnerName = transcript.winner;
@@ -2997,7 +2979,6 @@ Vue.createApp({
           this.participants = (ev.agents || []).map((a) => ({
             name: a.name,
             label: a.label,
-            persona: a.persona || '',
             perspective: a.perspective || '',
             state: 'alive',
             lastRole: '',
@@ -3722,7 +3703,6 @@ Vue.createApp({
         this.participants = (transcript.participants || []).map((p) => ({
           name: p.name,
           label: p.label,
-          persona: p.persona || '',
           state: 'alive',
           lastRole: '',
           lastElapsed: 0,
@@ -3953,14 +3933,6 @@ Vue.createApp({
         .split(/\n+/)
         .map((line) => line.replace(/^[-·•\d.、\s]+/, '').trim())
         .filter(Boolean);
-    },
-
-    // 模型的人格标签（只影响发言）。
-    agentPersona(name) {
-      const participant = this.participants.find((item) => item.name === name);
-      if (participant?.persona) return participant.persona;
-      const model = this.models.find((item) => item.name === name);
-      return model?.persona || '';
     },
 
   },

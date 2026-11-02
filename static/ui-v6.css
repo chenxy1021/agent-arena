@@ -5,6 +5,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
+  margin-top: 14px;
 }
 
 .mode-card {
@@ -83,15 +84,33 @@
   width: 100%;
   min-height: 46px;
   padding: 0 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-  background: rgba(4, 10, 18, .78);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(18, 32, 50, .55), rgba(7, 12, 22, .78));
   color: var(--ink);
+  font-size: 13px;
   cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .mode-select:focus {
   border-color: var(--live);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-halo);
+}
+
+[data-theme="light"] .mode-select {
+  background: rgba(255, 255, 255, .92);
+}
+
+/* Record: keep the round track visible while scrolling. */
+
+.record-layout > .round-track {
+  position: sticky;
+  top: calc(var(--topbar-height) + 18px);
+  max-height: calc(100dvh - var(--topbar-height) - 36px);
+  overflow-y: auto;
 }
 
 .mode-switch {

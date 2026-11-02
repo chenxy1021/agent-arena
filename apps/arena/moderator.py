@@ -97,6 +97,7 @@ class ArenaConfig:
     criteria: list[str] = field(default_factory=list)
     background: str = ""
     constraints: list[str] = field(default_factory=list)
+    run_id: str = ""
 
 
 @dataclass
@@ -354,7 +355,8 @@ class Arena:
         self.sink: EventSink = sink or NullSink()
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.run_dir = (Path(cfg.out_dir) / stamp).resolve()
+        suffix = f"-{cfg.run_id}" if cfg.run_id else ""
+        self.run_dir = (Path(cfg.out_dir) / f"{stamp}{suffix}").resolve()
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self._fail_streak: dict[str, int] = {a.name: 0 for a in self.agents}
@@ -379,11 +381,7 @@ class Arena:
             "model": str(getattr(agent, "model", getattr(agent, "label", "")) or ""),
             "config_id": int(getattr(agent, "config_id", 0) or 0),
             "path": str(getattr(agent, "path", "")),
-            "persona": str(getattr(agent, "persona", "") or ""),
         }
-
-    def _persona_of(self, agent: Any) -> str:
-        return str(getattr(agent, "persona", "") or "")
 
     def _record_usage(self, agent: Any, res: CallResult) -> None:
         self._usage["calls"] = int(self._usage.get("calls", 0)) + 1
@@ -697,7 +695,6 @@ class Arena:
             criteria=self.cfg.criteria,
             background=self.cfg.background,
             constraints=self.cfg.constraints,
-            persona=self._persona_of(agent),
             my_claims=my_claims,
             critiques_of_me=critiques,
         )

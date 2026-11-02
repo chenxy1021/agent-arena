@@ -5,7 +5,6 @@ v2 变化：
 - 发言末尾要求一行【主张】，主张台账的数据源由此而来；
 - 投票输出升级为多维评分 + 票 + 理由（理由不再截断到 40 字）；
 - 最终裁决要求输出【保留的分歧】与【失效条件】；
-- 人格只注入发言，投票环节一律关闭。
 """
 
 from __future__ import annotations
@@ -16,15 +15,6 @@ MAX_PRIOR_CHARS = 900   # 单条历史发言进入 prompt 的截断长度
 LAST_ROUND_CHARS = 400  # 上一轮发言的截断长度（点评只针对上一轮）
 
 SCORE_DIMENSIONS = ("论证", "证据", "可执行", "增量")
-
-# 人格预设：只影响发言风格，不影响投票判断。
-PERSONAS: dict[str, str] = {
-    "审计员": "审计员 · 只挑证据与逻辑漏洞，不给建设性方案",
-    "务实派": "务实派 · 只看落地成本与执行难度",
-    "反方": "反方 · 强制唱反调，优先反对当前共识",
-    "红队": "红队 · 攻击当前最强论点，找出它会失效的条件",
-    "归纳者": "归纳者 · 只归纳分歧，不给立场性主张",
-}
 
 DEFAULT_CRITERIA = (
     "是否真正推进了命题（新事实 / 新角度 / 可执行方案）",
@@ -58,16 +48,6 @@ def _context_block(
     return "\n\n".join(parts)
 
 
-def _persona_block(persona: str | None) -> str:
-    if not persona:
-        return ""
-    hint = PERSONAS.get(persona, persona)
-    return (
-        f"\n【你的辩论人格】{hint}\n"
-        "人格只影响你这一次的发言风格，不要在发言里解释你被分配了什么角色。\n"
-    )
-
-
 def build_speech_prompt(
     *,
     speaker: str,
@@ -81,7 +61,6 @@ def build_speech_prompt(
     criteria: Sequence[str] | None = None,
     background: str = "",
     constraints: Sequence[str] | None = None,
-    persona: str | None = None,
     my_claims: Sequence[str] | None = None,
     critiques_of_me: Sequence[str] | None = None,
 ) -> str:
@@ -185,7 +164,6 @@ def build_speech_prompt(
 
 【你的任务】
 {task}
-{_persona_block(persona)}
 【输出格式】严格按下面标签输出，不要任何开场白、解释或结尾总结：
 {format_block}
 

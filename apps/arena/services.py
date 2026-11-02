@@ -89,7 +89,6 @@ class Manager:
                     model=str(config["model"]),
                     system_prompt=str(config.get("system_prompt") or ""),
                     temperature=config.get("temperature"),
-                    persona=str(config.get("persona") or ""),
                 )
             )
         if len(agents) < 2:
@@ -113,7 +112,6 @@ class Manager:
                 model=str(judge_config["model"]),
                 system_prompt=str(judge_config.get("system_prompt") or ""),
                 temperature=judge_config.get("temperature"),
-                persona="",
             )
 
         run_id = uuid.uuid4().hex[:12]
@@ -124,7 +122,7 @@ class Manager:
             run_id=run_id,
             proposition=proposition,
             mode=payload.mode,
-            vote_mode=payload.vote_mode,
+            vote_mode=payload.vote_mode if payload.mode == "debate" else "review",
             participants=len(agents),
             started_at=started_at,
         )
@@ -139,6 +137,7 @@ class Manager:
             criteria=list(payload.criteria or []),
             background=payload.background,
             constraints=list(payload.constraints or []),
+            run_id=run_id,
         )
         review_cfg = ReviewConfig(
             proposition=proposition,
@@ -165,10 +164,13 @@ class Manager:
                 result = arena.run()
                 run.result = result.to_dict()
                 run.status = "cancelled" if result.stop_reason == "用户中止" else "done"
+                winner = getattr(result, "winner", None) or getattr(
+                    result, "recommended_agent", None
+                )
                 database.finish_run(
                     run_id=run_id,
                     status=run.status,
-                    winner=result.winner,
+                    winner=winner,
                     duration=result.duration,
                     run_dir=run.run_dir,
                 )
