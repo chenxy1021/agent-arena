@@ -252,7 +252,7 @@ def _iter_json_objects(text: str):
 
 
 def parse_vote(text: str, valid: Sequence[str], voter: str) -> tuple[str | None, str]:
-    """旧版单维投票解析：返回 (target, reason)。"""
+    """解析投票目标与理由，允许模型省略评分。"""
     pool = [v for v in valid if v != voter]
     if not pool:
         return None, ""

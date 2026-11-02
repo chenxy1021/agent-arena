@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import time
@@ -12,7 +11,6 @@ from typing import Any
 from config import settings
 
 DB_PATH = Path(os.environ.get("ARENA_DB", settings.DATABASE_PATH))
-RUNS_DIR = settings.RUNS_DIR
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -58,10 +56,6 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
-        # 老库补列：persona 是 v2 新增字段。
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(model_configs)")}
-        if "persona" not in columns:
-            conn.execute("ALTER TABLE model_configs ADD COLUMN persona TEXT NOT NULL DEFAULT ''")
 
 
 def create_model(
@@ -237,67 +231,3 @@ def mark_stale_runs_interrupted(db_path: Path | None = None) -> int:
             "UPDATE runs SET status = 'interrupted' WHERE status = 'running'"
         )
         return cursor.rowcount
-
-
-def sync_run_history(runs_dir: Path | None = None, db_path: Path | None = None) -> None:
-    """把旧版 runs/ 战报补进 SQLite，保留已有记录不覆盖。"""
-    root = Path(runs_dir or RUNS_DIR)
-    if not root.is_dir():
-        return
-    init_db(db_path)
-    with _connect(db_path) as conn:
-        # 同一 run_dir 只保留最新一条，清理旧版启动同步造成的重复记录。
-        conn.execute(
-            """
-            DELETE FROM runs
-            WHERE run_dir <> ''
-              AND EXISTS (
-                SELECT 1 FROM runs newer
-                WHERE newer.run_dir = runs.run_dir
-                  AND (
-                    newer.created_ts > runs.created_ts
-                    OR (newer.created_ts = runs.created_ts AND newer.id > runs.id)
-                  )
-              )
-            """
-        )
-    for run_dir in sorted(root.iterdir()):
-        transcript = run_dir / "transcript.json"
-        if not transcript.is_file():
-            continue
-        try:
-            data = json.loads(transcript.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        created = data.get("started_at") or ""
-        try:
-            created_ts = time.mktime(time.strptime(created, "%Y-%m-%d %H:%M:%S"))
-        except (TypeError, ValueError):
-            created_ts = run_dir.stat().st_mtime
-        resolved_dir = str(run_dir.resolve())
-        with _connect(db_path) as conn:
-            exists = conn.execute(
-                "SELECT 1 FROM runs WHERE run_dir = ? LIMIT 1", (resolved_dir,)
-            ).fetchone()
-            if exists:
-                continue
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO runs
-                    (id, proposition, vote_mode, status, winner, participants,
-                     duration, started_at, finished_at, run_dir, created_ts)
-                VALUES (?, ?, ?, 'done', ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_dir.name,
-                    data.get("proposition", ""),
-                    data.get("vote_mode", "eliminate"),
-                    data.get("winner"),
-                    len(data.get("participants") or []),
-                    data.get("duration"),
-                    created,
-                    created,
-                    resolved_dir,
-                    created_ts,
-                ),
-            )

@@ -2247,7 +2247,7 @@ Vue.createApp({
         budget: { calls: 24, tokens_estimate: 12480, wall_clock: 252, per_model: {} },
         stop_reason: '',
         converged: false,
-        schema_version: 2,
+        schema_version: 3,
         participants: DEMO_MODELS.map((model) => ({ name: model.name, label: model.model })),
         rounds: [
           {
@@ -2885,12 +2885,6 @@ Vue.createApp({
         const res = await fetch(`/api/history/${encodeURIComponent(id)}/preset`);
         const preset = await res.json();
         if (!res.ok) throw new Error(cleanError(preset));
-        if (!preset.reusable) {
-          this.hint = preset.warnings?.[0] || '这场旧战报没有可复用的完整预设';
-          this.hintError = true;
-          this.hintOk = false;
-          return;
-        }
 
         await this.loadModels();
         const selected = new Set((preset.model_ids || []).map(Number));
@@ -2920,10 +2914,6 @@ Vue.createApp({
           this.hint = `已复用这场预设：${preset.proposition}。确认阵容后开赛。`;
           this.hintError = false;
           this.hintOk = true;
-        }
-        if (preset.warnings?.length) {
-          this.hint = `${this.hint} ${preset.warnings.join(' ')}`;
-          this.hintError = this.hintError || !preset.resolved;
         }
         this.goPage('register');
       } catch (err) {

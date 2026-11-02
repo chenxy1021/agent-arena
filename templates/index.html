@@ -838,8 +838,8 @@
           </span>
           <span class="ledger__go">
             <button type="button" class="row-action" :disabled="!item.reusable"
-              :title="item.reusable ? '复用这场预设' : '旧战报没有完整预设'"
-              @click.stop="reuseHistoryRun(item.id)">{{ item.reusable ? '再赛' : '旧档案' }}</button>
+              :title="item.reusable ? '复用这场预设' : '比赛尚未归档，暂不能再赛'"
+              @click.stop="reuseHistoryRun(item.id)">再赛</button>
             <button type="button" class="text-action ledger__open" @click.stop="loadHistoryRun(item.id)">
               查看 <i aria-hidden="true">›</i>
             </button>

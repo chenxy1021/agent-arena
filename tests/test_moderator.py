@@ -268,7 +268,7 @@ class BallotParsingTest(unittest.TestCase):
         self.assertEqual(reason, "证据链更完整")
         self.assertEqual(scores["模型B"]["论证"], 8)
 
-    def test_falls_back_to_legacy_schema(self) -> None:
+    def test_accepts_ballot_without_scores(self) -> None:
         target, reason, scores = parse_ballot(
             '{"vote": "模型B", "reason": "缺少证据"}', ["模型A", "模型B"], "模型A"
         )

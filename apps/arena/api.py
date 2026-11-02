@@ -11,8 +11,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from config import settings
-
 from . import database
 from .providers import ApiModelAgent, suggest_display_name
 from .schemas import PERSONA_KEYS, ModelCreate, ModelNameRequest, ModelUpdate, StartRun
@@ -204,16 +202,16 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         run["stop_reason"] = str(transcript.get("stop_reason") or "")
         run["converged"] = bool(transcript.get("converged"))
         run["reusable"] = len(
-            (transcript.get("setup") or {}).get("model_ids") or []
+            (transcript.get("setup") or {}).get("model_ids", [])
         ) >= 2
     return {"runs": runs}
 
 
 def _read_transcript(meta: dict[str, Any]) -> dict[str, Any] | None:
-    run_dir = Path(meta.get("run_dir") or "")
-    if not run_dir.is_absolute():
-        run_dir = settings.RUNS_DIR / str(meta.get("id") or "")
-    transcript_path = run_dir / "transcript.json"
+    run_dir = meta.get("run_dir")
+    if not run_dir:
+        return None
+    transcript_path = Path(str(run_dir)) / "transcript.json"
     if not transcript_path.is_file():
         return None
     try:
@@ -227,7 +225,9 @@ def build_run_preset(
     transcript: dict[str, Any], configs: list[dict[str, Any]]
 ) -> dict[str, Any]:
     """Resolve a historical match into a safe setup draft for a new run."""
-    setup = transcript.get("setup") or {}
+    setup = transcript.get("setup")
+    if not isinstance(setup, dict):
+        raise ValueError("战报缺少当前版本所需的 setup 快照")
     participants = transcript.get("participants") or []
     by_id = {int(item["id"]): item for item in configs}
     participant_by_id = {
@@ -237,25 +237,11 @@ def build_run_preset(
     }
     model_ids = [
         int(value)
-        for value in (setup.get("model_ids") or [])
+        for value in setup.get("model_ids", [])
         if int(value or 0) > 0
     ]
-
-    if not setup or len(model_ids) < 2:
-        return {
-            "proposition": str(transcript.get("proposition") or ""),
-            "vote_mode": str(transcript.get("vote_mode") or "eliminate"),
-            "speech_mode": str(transcript.get("speech_mode") or "parallel_buffered"),
-            "timeout": 240.0,
-            "background": "",
-            "constraints": [],
-            "criteria": [],
-            "model_ids": [],
-            "missing_models": [],
-            "reusable": False,
-            "resolved": False,
-            "warnings": ["旧战报未保存当前版本所需的完整预设，请手动重新布置比赛。"],
-        }
+    if len(model_ids) < 2:
+        raise ValueError("战报缺少至少两个模型配置 ID")
 
     missing_models: list[dict[str, str]] = []
     for config_id in model_ids:
@@ -270,20 +256,14 @@ def build_run_preset(
     return {
         "proposition": str(transcript.get("proposition") or ""),
         "vote_mode": str(setup.get("vote_mode") or "eliminate"),
-        "speech_mode": str(
-            setup.get("speech_mode")
-            or transcript.get("speech_mode")
-            or "parallel_buffered"
-        ),
+        "speech_mode": str(setup.get("speech_mode") or "parallel_buffered"),
         "timeout": float(setup.get("timeout") or 240),
         "background": str(setup.get("background") or ""),
         "constraints": list(setup.get("constraints") or []),
         "criteria": list(setup.get("criteria") or []),
         "model_ids": model_ids,
         "missing_models": missing_models,
-        "reusable": True,
         "resolved": len(model_ids) >= 2 and not missing_models,
-        "warnings": [],
     }
 
 
@@ -304,4 +284,7 @@ def history_preset(run_id: str) -> dict[str, Any]:
     transcript = _read_transcript(meta)
     if not transcript:
         raise HTTPException(status_code=404, detail="transcript not found")
-    return build_run_preset(transcript, database.list_models())
+    try:
+        return build_run_preset(transcript, database.list_models())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

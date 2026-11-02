@@ -4,7 +4,7 @@ from apps.arena.schemas import StartRun
 
 
 class StartRunSchemaTest(unittest.TestCase):
-    def test_legacy_budget_fields_are_ignored(self) -> None:
+    def test_unknown_fields_are_ignored(self) -> None:
         payload = StartRun.model_validate({
             "proposition": "test",
             "model_ids": [1, 2],
