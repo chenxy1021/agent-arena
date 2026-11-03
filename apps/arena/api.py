@@ -3,18 +3,32 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import re
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+
+from config import settings
 
 from . import database
 from .providers import ApiModelAgent, suggest_display_name
-from .schemas import ModelCreate, ModelNameRequest, ModelUpdate, StartRun
-from .services import manager
+from .review import ReviewArena, ReviewConfig
+from .schemas import (
+    DecisionCreate,
+    ModelCreate,
+    ModelNameRequest,
+    ModelUpdate,
+    SeatRetryRequest,
+    StartRun,
+)
+from .services import ConflictError, manager
 
 router = APIRouter()
 
@@ -121,6 +135,8 @@ def suggest_model_name(payload: ModelNameRequest) -> dict[str, str]:
 def start_run(payload: StartRun) -> dict[str, str]:
     try:
         run = manager.start(payload)
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"run": run.id, "mode": run.mode}
@@ -291,6 +307,191 @@ def history_run(run_id: str) -> dict[str, Any]:
     return {"meta": meta, "transcript": transcript}
 
 
+def _safe_filename(text: str) -> str:
+    value = re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fff]+", "-", text.strip())
+    return value.strip("-")[:36] or "agent-arena"
+
+
+def _run_files(meta: dict[str, Any]) -> tuple[Path, Path, Path]:
+    run_dir = Path(str(meta.get("run_dir") or "")).resolve()
+    json_path = run_dir / "transcript.json"
+    markdown_path = run_dir / "review.md"
+    if not markdown_path.is_file():
+        markdown_path = run_dir / "debate.md"
+    return run_dir, json_path, markdown_path
+
+
+@router.get("/history/{run_id}/export")
+def export_history(
+    run_id: str,
+    format: str = Query(default="md", pattern="^(md|json|zip)$"),
+) -> Response:
+    meta = database.get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="history not found")
+    run_dir, json_path, markdown_path = _run_files(meta)
+    if not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="原始战报缺失")
+
+    filename = _safe_filename(str(meta.get("proposition") or run_id))
+    stamp = str(meta.get("started_at") or "").replace(":", "").replace(" ", "-")[:13]
+    disposition = f"attachment; filename*=UTF-8''{quote(f'{filename}-{stamp}.{format}')}"
+
+    if format == "md":
+        if not markdown_path.is_file():
+            raise HTTPException(status_code=404, detail="原始战报缺失")
+        return Response(
+            markdown_path.read_bytes(),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": disposition},
+        )
+    if format == "json":
+        if not json_path.is_file():
+            raise HTTPException(status_code=404, detail="原始战报缺失")
+        return Response(
+            json_path.read_bytes(),
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": disposition},
+        )
+    if not json_path.is_file() or not markdown_path.is_file():
+        raise HTTPException(status_code=404, detail="原始战报缺失")
+
+    manifest = {
+        "run_id": run_id,
+        "proposition": meta.get("proposition"),
+        "mode": meta.get("mode"),
+        "status": meta.get("status"),
+        "started_at": meta.get("started_at"),
+        "finished_at": meta.get("finished_at"),
+        "files": [markdown_path.name, json_path.name, "manifest.json"],
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(markdown_path, markdown_path.name)
+        archive.write(json_path, json_path.name)
+        archive.writestr(
+            "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2)
+        )
+    return Response(
+        buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@router.delete("/history/{run_id}")
+def delete_history(
+    run_id: str,
+    purge_files: bool = Query(default=False),
+) -> dict[str, Any]:
+    if not database.get_run(run_id):
+        raise HTTPException(status_code=404, detail="history not found")
+    try:
+        meta = database.soft_delete_run(run_id, purge_files=purge_files)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"索引已删，文件未删，可稍后重试：{exc}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"deleted": True, "purge_files": purge_files, "run": meta}
+
+
+@router.post("/history/{run_id}/restore")
+def restore_history(run_id: str) -> dict[str, Any]:
+    if not database.get_run(run_id):
+        raise HTTPException(status_code=404, detail="history not found")
+    try:
+        meta = database.restore_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
+    return {"restored": True, "run": meta}
+
+
+@router.post("/history/{run_id}/retry")
+def retry_history_seat(run_id: str, payload: SeatRetryRequest) -> dict[str, Any]:
+    meta = database.get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="history not found")
+    if str(meta.get("mode") or "debate") != "review":
+        raise HTTPException(status_code=400, detail="仅方案评审支持席位重跑")
+    if meta.get("status") not in ("done", "cancelled"):
+        raise HTTPException(status_code=400, detail="当前状态不支持席位重跑")
+    transcript = _read_transcript(meta)
+    if not transcript:
+        raise HTTPException(status_code=404, detail="原始战报缺失")
+
+    setup = transcript.get("setup") or {}
+    agents = []
+    configs: dict[int, dict[str, Any]] = {}
+    for participant in transcript.get("participants") or []:
+        config_id = int(participant.get("config_id") or 0)
+        config = database.get_model(config_id) if config_id else None
+        if not config:
+            raise HTTPException(status_code=409, detail="模型配置已删除，请先恢复")
+        configs[config_id] = config
+        agents.append(
+            ApiModelAgent(
+                config_id=config_id,
+                name=str(participant.get("name") or config["name"]),
+                base_url=str(config["base_url"]),
+                api_key=str(config["api_key"]),
+                model=str(config["model"]),
+                system_prompt=str(config.get("system_prompt") or ""),
+                temperature=config.get("temperature"),
+            )
+        )
+    judge_id = int(setup.get("judge_model_id") or 0)
+    judge_config = database.get_model(judge_id) if judge_id else None
+    if not judge_config:
+        raise HTTPException(status_code=409, detail="裁判配置已删除，请先恢复")
+    judge_info = transcript.get("judge") or {}
+    judge = ApiModelAgent(
+        config_id=judge_id,
+        name=str(judge_info.get("name") or judge_config["name"]),
+        base_url=str(judge_config["base_url"]),
+        api_key=str(judge_config["api_key"]),
+        model=str(judge_config["model"]),
+        system_prompt=str(judge_config.get("system_prompt") or ""),
+        temperature=judge_config.get("temperature"),
+    )
+    cfg = ReviewConfig(
+        proposition=str(transcript.get("proposition") or meta.get("proposition") or ""),
+        timeout=float(setup.get("timeout") or 240),
+        out_dir=Path(str(meta.get("run_dir") or settings.RUNS_DIR)),
+        criteria=list(setup.get("criteria") or []),
+        background=str(setup.get("background") or ""),
+        constraints=list(setup.get("constraints") or []),
+        diversify=bool(setup.get("diversify", True)),
+        run_id=run_id,
+        judge_same_model=bool(transcript.get("judge_same_model")),
+    )
+    arena = ReviewArena(
+        agents,
+        judge,
+        cfg,
+        run_dir=Path(str(meta.get("run_dir") or "")),
+    )
+    try:
+        result = arena.rerun_answer(transcript, payload.agent)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    database.finish_run(
+        run_id=run_id,
+        status="cancelled" if result.stop_reason == "用户中止" else "done",
+        winner=result.recommended_agent,
+        duration=result.duration,
+        run_dir=arena.run_dir,
+    )
+    return {
+        "retried": True,
+        "winner": result.recommended_agent,
+        "attempts": result.attempts,
+        "stop_reason": result.stop_reason,
+    }
+
+
 @router.get("/history/{run_id}/preset")
 def history_preset(run_id: str) -> dict[str, Any]:
     meta = database.get_run(run_id)
@@ -303,3 +504,212 @@ def history_preset(run_id: str) -> dict[str, Any]:
         return build_run_preset(transcript, database.list_models())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/history/{run_id}/decision")
+def get_decision(run_id: str) -> dict[str, Any]:
+    if not database.get_run(run_id):
+        raise HTTPException(status_code=404, detail="history not found")
+    return {
+        "decision": database.latest_decision(run_id),
+        "history": database.decision_history(run_id),
+    }
+
+
+@router.post("/history/{run_id}/decision", status_code=201)
+def save_decision(run_id: str, payload: DecisionCreate) -> dict[str, Any]:
+    meta = database.get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="history not found")
+    if meta.get("status") not in ("done", "cancelled"):
+        raise HTTPException(status_code=400, detail="只有已结束或已中止的运行可以记录决策")
+    note = payload.note.strip()
+    if payload.decision in ("partial", "rejected") and len(note) < 5:
+        raise HTTPException(status_code=400, detail="部分采纳或驳回需要至少 5 个字的备注")
+    if payload.decision == "adopted" and not (payload.adopted_ref or "").strip():
+        raise HTTPException(status_code=400, detail="采纳需要指定采纳对象")
+    record = database.save_decision(
+        run_id=run_id,
+        decision=payload.decision,
+        adopted_kind=payload.adopted_kind,
+        adopted_ref=payload.adopted_ref,
+        reason_code=payload.reason_code,
+        note=note,
+    )
+    return {"decision": record, "history": database.decision_history(run_id)}
+
+
+@router.delete("/history/{run_id}/decision")
+def revert_decision(run_id: str) -> dict[str, Any]:
+    if not database.get_run(run_id):
+        raise HTTPException(status_code=404, detail="history not found")
+    database.revert_decision(run_id)
+    return {
+        "decision": database.latest_decision(run_id),
+        "history": database.decision_history(run_id),
+    }
+
+
+@router.get("/accuracy")
+def accuracy(mode: str = Query(default="review", pattern="^(review|debate)$")) -> dict[str, Any]:
+    runs = database.list_runs(200)
+    rows: dict[str, dict[str, Any]] = {}
+    summary = {
+        "n_completed": 0,
+        "n_decided": 0,
+        "adopted": 0,
+        "partial": 0,
+        "rejected": 0,
+        "undecided": 0,
+        "recommend_adopted": 0,
+        "top1_hit": 0,
+    }
+    for run in runs:
+        if str(run.get("mode") or "debate") != mode or run.get("status") != "done":
+            continue
+        transcript = _read_transcript(run) or {}
+        judge = transcript.get("judge") if isinstance(transcript.get("judge"), dict) else {}
+        judge_name = str(
+            judge.get("name") or judge.get("label") or transcript.get("judge_name") or "—"
+        )
+        row = rows.setdefault(
+            judge_name,
+            {
+                "judge_model": judge_name,
+                "n_completed": 0,
+                "n_decided": 0,
+                "adopted": 0,
+                "partial": 0,
+                "rejected": 0,
+                "undecided": 0,
+                "recommend_adopted": 0,
+                "top1_hit": 0,
+            },
+        )
+        for target in (summary, row):
+            target["n_completed"] += 1
+
+        recommended = str(transcript.get("recommended") or "")
+        ranking = transcript.get("ranking") or []
+        ranks = transcript.get("ranks") if isinstance(transcript.get("ranks"), dict) else {}
+        top1 = str(ranking[0]) if ranking else ""
+        hit = bool(recommended and (
+            ranks.get(recommended) == 1 if ranks else recommended == top1
+        ))
+        if hit:
+            for target in (summary, row):
+                target["top1_hit"] += 1
+
+        decision = database.latest_decision(str(run["id"]))
+        if not decision:
+            continue
+        kind = str(decision.get("decision") or "")
+        for target in (summary, row):
+            target["n_decided"] += 1
+            if kind in target:
+                target[kind] += 1
+        if (
+            kind in ("adopted", "partial")
+            and recommended
+            and recommended in str(decision.get("adopted_ref") or "").split(",")
+        ):
+            for target in (summary, row):
+                target["recommend_adopted"] += 1
+    return {"mode": mode, "summary": summary, "rows": list(rows.values())}
+
+
+@router.get("/profiles")
+def profiles(mode: str = Query(default="review", pattern="^(review|debate)$")) -> dict[str, Any]:
+    configs = {int(item["id"]): item for item in database.list_models()}
+    profiles_by_key: dict[str, dict[str, Any]] = {}
+    for run in database.list_runs(200):
+        if str(run.get("mode") or "debate") != mode or run.get("status") != "done":
+            continue
+        transcript = _read_transcript(run) or {}
+        participants = transcript.get("participants") or []
+        answers = {
+            str(item.get("agent") or ""): item
+            for item in transcript.get("answers") or []
+            if isinstance(item, dict)
+        }
+        labels = {
+            str(item.get("agent") or ""): str(item.get("label") or "")
+            for item in transcript.get("labels") or []
+            if isinstance(item, dict)
+        }
+        scores = transcript.get("scores") if isinstance(transcript.get("scores"), dict) else {}
+        speeches_by_agent: dict[str, list[dict[str, Any]]] = {}
+        for round_record in transcript.get("rounds") or []:
+            for speech in round_record.get("speeches") or []:
+                summary = speeches_by_agent.setdefault(str(speech.get("agent") or ""), [])
+                summary.append(speech)
+        winner = str(
+            transcript.get("recommended_agent")
+            or transcript.get("winner")
+            or run.get("winner")
+            or ""
+        )
+
+        for participant in participants:
+            if not isinstance(participant, dict):
+                continue
+            name = str(participant.get("name") or "")
+            config_id = int(participant.get("config_id") or 0)
+            model = str(participant.get("model") or participant.get("label") or "")
+            key = f"id:{config_id}" if config_id else f"model:{model.strip().lower()}"
+            if key not in profiles_by_key:
+                config = configs.get(config_id) or {}
+                profiles_by_key[key] = {
+                    "identity_key": key,
+                    "config_id": config_id or None,
+                    "name": str(config.get("name") or name or model or "未知模型"),
+                    "model": str(config.get("model") or model),
+                    "appearances": 0,
+                    "valid": 0,
+                    "wins": 0,
+                    "score_total": 0.0,
+                    "score_n": 0,
+                }
+            profile = profiles_by_key[key]
+            profile["appearances"] += 1
+            if mode == "review":
+                answer = answers.get(name) or {}
+                valid = bool(answer.get("text")) and not answer.get("error") and not answer.get("cancelled")
+                label = labels.get(name) or ""
+                dims = scores.get(label) if isinstance(scores.get(label), dict) else {}
+            else:
+                own = speeches_by_agent.get(name, [])
+                valid = any(
+                    item.get("text") and not item.get("error") and not item.get("cancelled")
+                    for item in own
+                )
+                dims = {}
+                for round_record in transcript.get("rounds") or []:
+                    row = (round_record.get("scores") or {}).get(name)
+                    if isinstance(row, dict):
+                        dims = row
+                        break
+            if valid:
+                profile["valid"] += 1
+                if winner == name:
+                    profile["wins"] += 1
+            if dims:
+                profile["score_total"] += sum(float(value) for value in dims.values())
+                profile["score_n"] += len(dims)
+
+    model_counts: dict[str, int] = {}
+    for profile in profiles_by_key.values():
+        model_key = str(profile.get("model") or "").strip().lower()
+        model_counts[model_key] = model_counts.get(model_key, 0) + 1
+    rows = []
+    for profile in profiles_by_key.values():
+        model_key = str(profile.get("model") or "").strip().lower()
+        profile["suspected_same_model"] = model_counts.get(model_key, 0) > 1
+        profile["avg_score"] = (
+            round(profile.pop("score_total") / profile["score_n"], 1)
+            if profile["score_n"] else None
+        )
+        profile.pop("score_n", None)
+        rows.append(profile)
+    rows.sort(key=lambda item: (-item["wins"], -item["valid"], item["name"]))
+    return {"mode": mode, "rows": rows}

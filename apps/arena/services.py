@@ -17,6 +17,10 @@ from .review import ReviewArena, ReviewConfig
 from .schemas import StartRun
 
 
+class ConflictError(ValueError):
+    """可恢复的冲突（并发运行、同源裁判），接口返回 409。"""
+
+
 class RunState:
     def __init__(self, run_id: str, proposition: str, mode: str = "debate"):
         self.id = run_id
@@ -46,6 +50,7 @@ class Manager:
     def __init__(self) -> None:
         self.runs: dict[str, RunState] = {}
         self.lock = threading.Lock()
+        self._starting = False
 
     def get(self, run_id: str) -> RunState | None:
         with self.lock:
@@ -65,6 +70,20 @@ class Manager:
             return True
 
     def start(self, payload: StartRun) -> RunState:
+        with self.lock:
+            running = next((run for run in self.runs.values() if run.status == "running"), None)
+            if running is not None:
+                raise ConflictError(f"已有一场运行中：{running.id}")
+            if self._starting:
+                raise ConflictError("已有一场运行正在创建")
+            self._starting = True
+        try:
+            return self._start_unlocked(payload)
+        finally:
+            with self.lock:
+                self._starting = False
+
+    def _start_unlocked(self, payload: StartRun) -> RunState:
         proposition = payload.proposition.strip()
         if not proposition:
             raise ValueError("命题不能为空")
@@ -95,6 +114,7 @@ class Manager:
             raise ValueError("至少需要选择 2 个参赛大模型")
 
         judge: ApiModelAgent | None = None
+        judge_same_model = False
         if payload.mode == "review":
             judge_id = int(payload.judge_model_id or 0)
             if not judge_id:
@@ -104,6 +124,15 @@ class Manager:
             judge_config = configs.get(judge_id) or database.get_model(judge_id)
             if not judge_config:
                 raise ValueError("裁判模型配置不存在")
+            judge_model_key = str(judge_config["model"]).strip().lower()
+            judge_same_model = any(
+                str(config["model"]).strip().lower() == judge_model_key
+                for config in configs.values()
+            )
+            if judge_same_model:
+                raise ConflictError(
+                    "裁判与参赛模型同源，评审可能偏向自身；本场未运行，请更换裁判"
+                )
             judge = ApiModelAgent(
                 config_id=judge_id,
                 name=str(judge_config["name"]),
@@ -148,6 +177,7 @@ class Manager:
             constraints=list(payload.constraints or []),
             diversify=payload.diversify,
             run_id=run_id,
+            judge_same_model=judge_same_model,
         )
 
         def worker() -> None:

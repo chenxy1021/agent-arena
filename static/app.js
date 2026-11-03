@@ -584,6 +584,18 @@ Vue.createApp({
       stopArmed: false,
       stopping: false,
       archiveMode: 'ledger',
+      accuracy: null,
+      accuracyLoading: false,
+      profileRows: [],
+      profilesLoading: false,
+      decision: null,
+      decisionHistory: [],
+      decisionBusy: false,
+      decisionNote: '',
+      decisionReason: '',
+      decisionSources: [],
+      sameSourceWarning: '',
+      retryingSeat: '',
       compareIds: [],
       models: [],
       modelsLoading: true,
@@ -606,6 +618,7 @@ Vue.createApp({
       archiveSearch: '',
       archiveScope: 'all',
       viewingHistoryId: '',
+      viewingRunStatus: '',
       canReuseCurrentRun: false,
       participants: [],
       rounds: [],
@@ -690,10 +703,47 @@ Vue.createApp({
       return this.runMode !== 'review' || Boolean(this.reviewJudgeId);
     },
 
-    debateCost() {
+    costEstimate() {
       const count = Math.max(2, this.selectedModelIds.length);
-      const calls = Math.max(8, count * count * 2 + count);
-      return `约 ${calls} 次调用 · 预计 5–12 分钟`;
+      const mode = this.runMode === 'review' ? 'review' : 'debate';
+      const historical = this.history
+        .filter((item) => (item.mode || 'debate') === mode
+          && Number(item.participants) === count
+          && item.status === 'done'
+          && Number(item.duration) > 0)
+        .map((item) => Number(item.duration))
+        .sort((a, b) => a - b);
+      let calls;
+      let worst;
+      let minutes;
+      if (mode === 'review') {
+        calls = count + 2;
+        worst = count + 3;
+        minutes = [1, 3];
+      } else {
+        const table = { 2: 6, 3: 11, 4: 34, 5: 52, 6: 74, 7: 90, 8: 108 };
+        calls = table[count] || count * count * 2 + count;
+        worst = calls + Math.max(2, count);
+        minutes = count <= 3 ? [3, 7] : count <= 4 ? [5, 11] : [8, 16];
+      }
+      let basis = '静态估算';
+      if (historical.length) {
+        const mid = historical[Math.floor(historical.length / 2)];
+        minutes = [
+          Math.max(0.5, Math.round(mid * 0.75 / 30) / 2),
+          Math.max(1, Math.round(mid * 1.3 / 30) / 2),
+        ];
+        basis = `基于最近 ${historical.length} 场同规模记录`;
+      }
+      const tokenLow = Math.round(calls * 700 / 1000);
+      const tokenHigh = Math.round(worst * 1800 / 1000);
+      return {
+        calls,
+        worst,
+        minutes,
+        basis,
+        text: `约 ${calls} 次调用（最坏 ${worst} 次） · 预计 ${minutes[0]}–${minutes[1]} 分钟 · 约 ${tokenLow}k–${tokenHigh}k tokens · ${basis}`,
+      };
     },
 
     reviewDimensions() {
@@ -714,7 +764,7 @@ Vue.createApp({
         return '参赛模型之间互不可见，六段式方案完成后统一进入匿名评审。';
       }
       if (this.reviewPhase === 'judging') {
-        return '方案已乱序并替换为匿名标签，裁判按四个维度评分。';
+        return '方案已乱序并替换为匿名标签，裁判按四个维度评分，差异度不计入总分。';
       }
       if (this.reviewPhase === 'synthesis') {
         return '评分已完成，正在整理推荐理由、其他方案优点和执行步骤。';
@@ -730,7 +780,7 @@ Vue.createApp({
       const current = rank[this.reviewPhase] || 0;
       return [
         { key: 'answers', index: '01', label: '独立作答', detail: `${this.reviewRows.filter((row) => row.text || row.error).length}/${this.reviewRows.length || 0} 完成` },
-        { key: 'judging', index: '02', label: '匿名评审', detail: this.reviewJudgeResult ? '评分已返回' : '四维评分' },
+        { key: 'judging', index: '02', label: '匿名评审', detail: this.reviewJudgeResult ? '评分已返回' : '三维总分' },
         { key: 'synthesis', index: '03', label: '推荐整合', detail: this.reviewSynthesis ? '已生成' : '执行建议' },
       ].map((step, index) => ({
         ...step,
@@ -764,7 +814,8 @@ Vue.createApp({
       const result = this.reviewJudgeResult;
       if (!result) return [];
       const labels = result.ranking?.length ? result.ranking : Object.keys(result.scores || {});
-      return labels.map((label) => {
+      const tied = new Set(result.tie?.tied_labels || []);
+      return labels.map((label, index) => {
         const row = this.reviewRows.find((item) => item.label === label);
         return {
           label,
@@ -772,6 +823,8 @@ Vue.createApp({
           perspective: row?.perspective || '',
           dims: result.scores?.[label] || {},
           total: result.totals?.[label] ?? '—',
+          rank: result.ranks?.[label] ?? index + 1,
+          tied: tied.has(label),
         };
       });
     },
@@ -1218,6 +1271,50 @@ Vue.createApp({
       return `${used.toLocaleString()} 次调用 · ${tokens.toLocaleString()} tok`;
     },
 
+    reviewEstimate() {
+      return this.costEstimate.text;
+    },
+
+    decisionRunId() {
+      if (this.viewingHistoryId && this.viewingHistoryId !== 'demo'
+        && ['done', 'cancelled'].includes(this.viewingRunStatus)) {
+        return this.viewingHistoryId;
+      }
+      return this.activeRunId && ['done', 'cancelled'].includes(this.status)
+        ? this.activeRunId : '';
+    },
+
+    reviewTieLabels() {
+      return new Set(this.reviewJudgeResult?.tie?.tied_labels || []);
+    },
+
+    reviewTieText() {
+      return [...this.reviewTieLabels].join(' / ');
+    },
+
+    reviewDeviation() {
+      const dev = this.reviewJudgeResult?.recommend_deviation;
+      if (!dev || dev.matched !== false) return null;
+      return {
+        reason: dev.reason || '',
+        recommended: this.reviewJudgeResult?.recommended || '',
+        agent: this.reviewJudgeResult?.recommended_agent || '',
+        first: this.reviewJudgeResult?.ranking?.[0] || '',
+      };
+    },
+
+    decisionSourceOptions() {
+      if (this.runMode === 'review') {
+        return this.reviewScoreRows.map((row) => ({
+          value: row.label,
+          label: `${row.label} · ${row.agent}`,
+        }));
+      }
+      return this.participants
+        .filter((item) => item.name !== this.winnerName)
+        .map((item) => ({ value: item.name, label: item.name }));
+    },
+
     parallelVisible() {
       return !this.tiebreakActive
         && this.speechMode === 'parallel_buffered'
@@ -1310,7 +1407,14 @@ Vue.createApp({
 
     // 档案页：对比模式的可选场次（同一命题优先）
     compareCandidates() {
-      return this.filteredHistory.slice(0, 30);
+      const rows = this.filteredHistory.slice(0, 60);
+      const anchor = this.history.find((item) => item.id === this.compareIds[0]);
+      if (!anchor) return rows.slice(0, 30);
+      return rows.sort((a, b) => {
+        const aSame = a.proposition === anchor.proposition ? 1 : 0;
+        const bSame = b.proposition === anchor.proposition ? 1 : 0;
+        return bSame - aSame || String(b.started_at).localeCompare(String(a.started_at));
+      }).slice(0, 30);
     },
 
     filteredHistory() {
@@ -1323,6 +1427,7 @@ Vue.createApp({
         item.proposition,
         item.winner,
         item.recommended_agent,
+        item.judge_name,
         ...(item.participant_names || []),
       ].some((value) => String(value || '').toLowerCase().includes(query)));
     },
@@ -1342,6 +1447,7 @@ Vue.createApp({
 
     // 档案页：模型画像（用历史战报里的分数与胜率聚合）
     modelProfiles() {
+      if (this.profileRows.length) return this.profileRows;
       const byName = new Map();
       const scoped = this.archiveScope === 'all'
         ? []
@@ -1445,6 +1551,7 @@ Vue.createApp({
       if (updateHash) this.writeRoute(page);
       window.scrollTo({ top: 0, behavior: 'auto' });
       if (page === 'venue') this.$nextTick(this.setupStage);
+      if (page === 'archive') this.loadArchiveInsights();
       this.$nextTick(this.syncNavIndicator);
     },
 
@@ -1576,6 +1683,10 @@ Vue.createApp({
         this.hint = '两种模式的评分口径不同，不能跨模式对比';
         this.hintError = true;
         return;
+      }
+      if (candidate && first && candidate.proposition !== first.proposition) {
+        const proceed = window.confirm('命题不同，结论不可直接比较。仍要加入对比吗？');
+        if (!proceed) return;
       }
       if (this.compareIds.length >= 3) {
         this.hint = '一次最多对比 3 场。';
@@ -2283,6 +2394,239 @@ Vue.createApp({
       }
     },
 
+    async loadAccuracy() {
+      this.accuracyLoading = true;
+      try {
+        const mode = this.archiveScope === 'all' ? 'review' : this.archiveScope;
+        const res = await fetch(`/api/accuracy?mode=${encodeURIComponent(mode)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.accuracy = data;
+      } catch (err) {
+        this.accuracy = null;
+        this.hint = `准确率读取失败：${err.message}`;
+        this.hintError = true;
+      } finally {
+        this.accuracyLoading = false;
+      }
+    },
+
+    async loadProfiles() {
+      if (this.archiveScope === 'all') {
+        this.profileRows = [];
+        return;
+      }
+      this.profilesLoading = true;
+      try {
+        const res = await fetch(`/api/profiles?mode=${encodeURIComponent(this.archiveScope)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.profileRows = data.rows || [];
+      } catch (err) {
+        this.profileRows = [];
+        this.hint = `模型画像读取失败：${err.message}`;
+        this.hintError = true;
+      } finally {
+        this.profilesLoading = false;
+      }
+    },
+
+    loadArchiveInsights() {
+      this.loadAccuracy();
+      this.loadProfiles();
+    },
+
+    async loadDecision(runId) {
+      this.decision = null;
+      this.decisionHistory = [];
+      this.decisionNote = '';
+      this.decisionReason = '';
+      this.decisionSources = [];
+      this.sameSourceWarning = '';
+      if (!runId) return;
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(runId)}/decision`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.decision = data.decision || null;
+        this.decisionHistory = data.history || [];
+        if (this.decision) {
+          this.decisionNote = this.decision.note || '';
+          this.decisionReason = this.decision.reason_code || '';
+          this.decisionSources = this.decision.adopted_kind === 'labels'
+            ? String(this.decision.adopted_ref || '').split(',').filter(Boolean)
+            : [];
+        }
+      } catch (_) {
+        // 决策读取失败不阻断战报查看。
+      }
+    },
+
+    async submitDecision(kind) {
+      const runId = this.decisionRunId;
+      if (!runId || this.decisionBusy) return;
+      const note = this.decisionNote.trim();
+      if (['partial', 'rejected'].includes(kind) && note.length < 5) {
+        this.hint = '部分采纳或驳回需要至少 5 个字的备注';
+        this.hintError = true;
+        return;
+      }
+      const adoptedRef = this.runMode === 'review'
+        ? (this.reviewJudgeResult?.recommended || '')
+        : this.winnerName;
+      if (
+        (kind === 'adopted' && !adoptedRef)
+        || (kind === 'partial' && !adoptedRef && !this.decisionSources.length)
+      ) {
+        this.hint = '这场还没有可采纳的推荐方案或胜者';
+        this.hintError = true;
+        return;
+      }
+      const payload = {
+        decision: kind,
+        adopted_kind: kind === 'partial'
+          ? (this.runMode === 'review' ? 'labels' : 'agents')
+          : this.runMode === 'review' ? 'label' : 'agent',
+        adopted_ref: kind === 'partial' && this.decisionSources.length
+          ? this.decisionSources.join(',')
+          : ['adopted', 'partial'].includes(kind) ? adoptedRef : null,
+        reason_code: kind === 'rejected' ? (this.decisionReason || 'other') : null,
+        note,
+      };
+      this.decisionBusy = true;
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(runId)}/decision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.decision = data.decision || null;
+        this.decisionHistory = data.history || [];
+        this.hint = kind === 'undecided' ? '已记录为暂不采纳' : '决策已记录';
+        this.hintError = false;
+        await this.loadHistory();
+      } catch (err) {
+        this.hint = `决策保存失败：${err.message}`;
+        this.hintError = true;
+      } finally {
+        this.decisionBusy = false;
+      }
+    },
+
+    exportRun(format) {
+      const runId = this.decisionRunId || this.viewingHistoryId;
+      if (!runId || runId === 'demo') {
+        this.hint = '当前记录暂不可导出';
+        this.hintError = true;
+        return;
+      }
+      window.location.href = `/api/history/${encodeURIComponent(runId)}/export?format=${format}`;
+    },
+
+    decisionLabel(kind) {
+      return {
+        adopted: '采纳',
+        partial: '部分采纳',
+        rejected: '驳回',
+        undecided: '暂不采纳',
+        pending: '待决策',
+      }[kind] || kind;
+    },
+
+    async retrySeat(agent) {
+      const runId = this.viewingHistoryId;
+      if (!runId || runId === 'demo' || this.retryingSeat) return;
+      this.retryingSeat = agent;
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(runId)}/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.hint = `${agent} 已重跑，评审已重新计算`;
+        this.hintError = false;
+        await this.loadHistoryRun(runId, { updateHash: false });
+      } catch (err) {
+        this.hint = `席位重跑失败：${err.message}`;
+        this.hintError = true;
+      } finally {
+        this.retryingSeat = '';
+      }
+    },
+
+    async deleteCurrentRun(purgeFiles = false) {
+      const runId = this.viewingHistoryId || this.activeRunId;
+      if (!runId || runId === 'demo') return;
+      const prompt = purgeFiles
+        ? '同时删除本地战报文件？此操作不可恢复。'
+        : '删除这条档案？默认保留本地战报文件。';
+      if (!window.confirm(prompt)) return;
+      if (purgeFiles && !window.confirm('再次确认：本地战报文件删除后无法恢复。')) return;
+      try {
+        const res = await fetch(
+          `/api/history/${encodeURIComponent(runId)}?purge_files=${purgeFiles}`,
+          { method: 'DELETE' },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.hint = purgeFiles ? '档案与本地文件已删除' : '档案已软删除，本地文件仍保留';
+        this.hintError = false;
+        this.viewingHistoryId = '';
+        this.viewingRunStatus = '';
+        await this.loadHistory();
+        this.goPage('archive');
+      } catch (err) {
+        this.hint = `删除失败：${err.message}`;
+        this.hintError = true;
+      }
+    },
+
+    async restoreCurrentRun() {
+      const runId = this.viewingHistoryId;
+      if (!runId || runId === 'demo') return;
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(runId)}/restore`, {
+          method: 'POST',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.viewingRunStatus = data.run?.status || 'done';
+        this.hint = '档案已恢复';
+        this.hintError = false;
+        await this.loadHistory();
+      } catch (err) {
+        this.hint = `恢复失败：${err.message}`;
+        this.hintError = true;
+      }
+    },
+
+    async revertDecision() {
+      const runId = this.decisionRunId;
+      if (!runId || this.decisionBusy) return;
+      this.decisionBusy = true;
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(runId)}/decision`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(cleanError(data));
+        this.decision = null;
+        this.decisionHistory = data.history || [];
+        this.hint = '决策已撤销，可重新记录';
+        this.hintError = false;
+        await this.loadHistory();
+      } catch (err) {
+        this.hint = `撤销失败：${err.message}`;
+        this.hintError = true;
+      } finally {
+        this.decisionBusy = false;
+      }
+    },
+
     resetArena() {
       this.closeStream();
       this.stopDemo();
@@ -2297,6 +2641,14 @@ Vue.createApp({
       this.reviewSynthesisSections = null;
       this.reviewAbsent = [];
       this.reviewAnomalies = [];
+      this.decision = null;
+      this.decisionHistory = [];
+      this.decisionNote = '';
+      this.decisionReason = '';
+      this.decisionSources = [];
+      this.sameSourceWarning = '';
+      this.viewingRunStatus = '';
+      this.retryingSeat = '';
       this.currentRound = 0;
       this.final = null;
       this.winnerName = '';
@@ -2431,7 +2783,11 @@ Vue.createApp({
           body: JSON.stringify(payload),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(cleanError(data));
+        if (!res.ok) {
+          const message = cleanError(data);
+          if (message.includes('同源')) this.sameSourceWarning = message;
+          throw new Error(message);
+        }
         this.runMode = data.mode === 'review' ? 'review' : 'debate';
         this.activeRunId = data.run;
         this.openStream(data.run);
@@ -2443,6 +2799,7 @@ Vue.createApp({
         this.hint = err.message;
         this.hintError = true;
         this.stopTimer();
+        if (err.message.includes('同源')) this.goPage('register');
       }
     },
 
@@ -3071,11 +3428,15 @@ Vue.createApp({
             text: ev.text || '',
             elapsed: Number(ev.elapsed || 0),
             error: ev.error || '',
+            cancelled: Boolean(ev.cancelled),
             missing: ev.missing || [],
-            state: ev.error ? 'error' : 'done',
+            state: ev.cancelled ? 'cancelled' : ev.error ? 'error' : 'done',
+            statusLabel: ev.cancelled ? '已中止（部分产出）' : ev.error ? '缺席' : '已提交',
           });
           this.setAgentState(ev.agent, ev.error ? 'out' : 'alive');
-          this.liveLabel = ev.error
+          this.liveLabel = ev.cancelled
+            ? `${ev.agent} 已中止，保留部分产出`
+            : ev.error
             ? `${ev.agent} 作答失败，已记为缺席`
             : `${ev.agent} 已提交方案`;
           break;
@@ -3110,6 +3471,10 @@ Vue.createApp({
             reasons: ev.reasons || {},
             risks: ev.risks || {},
             rejections: ev.rejections || {},
+            ranks: ev.ranks || {},
+            tie: ev.tie || {},
+            recommend_deviation: ev.recommend_deviation || {},
+            score_basis: 'three_dim',
           };
           this.reviewAnomalies = [
             ...this.reviewAnomalies,
@@ -3274,6 +3639,7 @@ Vue.createApp({
               elapsed: Number(ev.elapsed || 0),
               stance: Number.isFinite(Number(ev.stance)) ? Number(ev.stance) : null,
               error: ev.error || '',
+              cancelled: Boolean(ev.cancelled),
               done: true,
             });
             this.parallelRows = [...this.parallelRows];
@@ -3290,7 +3656,9 @@ Vue.createApp({
             agent: ev.agent,
             role: ev.role,
             round: this.currentRound || 1,
-            text: ev.error ? `调用失败：${ev.error}` : (ev.text || ''),
+            text: ev.cancelled
+              ? `已中止（部分产出）\n\n${ev.text || ''}`
+              : ev.error ? `调用失败：${ev.error}` : (ev.text || ''),
             elapsed: Number(ev.elapsed || 0),
           };
           const participant = this.participants.find((p) => p.name === ev.agent);
@@ -3298,7 +3666,9 @@ Vue.createApp({
             participant.lastRole = ev.role;
             participant.lastElapsed = ev.elapsed;
           }
-          this.liveLabel = ev.error
+          this.liveLabel = ev.cancelled
+            ? `${ev.agent} 已中止，保留部分产出`
+            : ev.error
             ? `${ev.agent} 发言失败`
             : `${ev.agent} 发言完成，用时 ${Number(ev.elapsed || 0).toFixed(1)} 秒`;
           this.activeAgent = ev.agent;
@@ -3306,7 +3676,7 @@ Vue.createApp({
           this.stageStartedAt = 0;
           this.stageElapsed = Number(ev.elapsed || 0);
           this.waitingMode = false;
-          this.speechArchived = !ev.error;
+          this.speechArchived = !ev.error && !ev.cancelled;
           this.stopStream();
           this.$nextTick(this.scrollLiveOutput);
           this.playFx('settle', 380);
@@ -3626,6 +3996,7 @@ Vue.createApp({
           this.tiebreakState = null;
           this.stopTimer();
           this.loadHistory();
+          if (this.activeRunId) this.loadDecision(this.activeRunId);
           this.$nextTick(this.scrollLiveOutput);
           break;
       }
@@ -3725,6 +4096,7 @@ Vue.createApp({
         this.replaying = true;
         this.running = false;
         this.viewingHistoryId = id;
+        this.viewingRunStatus = String(data.meta?.status || 'done');
         this.canReuseCurrentRun = (transcript.setup?.model_ids || []).length >= 2;
         this.proposition = transcript.proposition || this.proposition;
         this.runMode = transcript.mode === 'review' ? 'review' : 'debate';
@@ -3750,8 +4122,9 @@ Vue.createApp({
           elapsed: Number(answer.elapsed || 0),
           chars: String(answer.text || '').length,
           progress: 100,
-          state: answer.error ? 'error' : 'done',
-          statusLabel: answer.error ? '缺席' : '已提交',
+            cancelled: Boolean(answer.cancelled),
+            state: answer.cancelled ? 'cancelled' : answer.error ? 'error' : 'done',
+            statusLabel: answer.cancelled ? '已中止（部分产出）' : answer.error ? '缺席' : '已提交',
           waitingLabel: '方案已提交',
           missing: answer.missing || [],
           error: answer.error || '',
@@ -3766,6 +4139,10 @@ Vue.createApp({
             reasons: transcript.reasons || {},
             risks: transcript.risks || {},
             rejections: transcript.rejections || {},
+            ranks: transcript.ranks || {},
+            tie: transcript.tie || {},
+            recommend_deviation: transcript.recommend_deviation || {},
+            score_basis: transcript.score_basis || 'three_dim',
           };
         }
         this.reviewSynthesis = transcript.synthesis || '';
@@ -3843,6 +4220,7 @@ Vue.createApp({
         this.hint = '';
         this.hintError = false;
         this.currentPage = 'record';
+        await this.loadDecision(id);
         if (options.updateHash !== false) this.writeRoute('record', id);
         this.$nextTick(() => {
           this.setupStage();

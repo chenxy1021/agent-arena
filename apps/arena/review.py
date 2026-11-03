@@ -37,6 +37,7 @@ PERSPECTIVE_GUIDES = {
     "生态协同": "说明合作方、渠道、接口与利益分配，以及依赖失效时的替代方案。",
 }
 DIMENSIONS = ("可行性", "正确性", "完备性", "差异度")
+SCORING_DIMENSIONS = ("可行性", "正确性", "完备性")
 PLAN_MARKERS = {
     "name": "方案名",
     "claim": "核心主张",
@@ -59,6 +60,7 @@ class ReviewConfig:
     constraints: list[str] = field(default_factory=list)
     diversify: bool = True
     run_id: str = ""
+    judge_same_model: bool = False
 
 
 @dataclass
@@ -86,7 +88,12 @@ class ReviewResult:
     budget: dict[str, Any]
     stop_reason: str = ""
     mode: str = "review"
-    schema_version: int = 4
+    schema_version: int = 5
+    judge_same_model: bool = False
+    tie: dict[str, Any] = field(default_factory=dict)
+    recommend_deviation: dict[str, Any] = field(default_factory=dict)
+    score_basis: str = "three_dim"
+    attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -178,7 +185,7 @@ def build_judge_prompt(
                 f"方案原文：\n{_clip(item.get('text') or '（原文为空）', 1600)}"
             )
         blocks.append(
-            f"""【{item['label']}】视角：{item['perspective'] or '未分配'}
+            f"""【{item['label']}】
 方案名：{plan.get('name') or '—'}
 核心主张：{plan.get('claim') or '—'}
 做法步骤：{plan.get('steps') or '—'}
@@ -198,6 +205,7 @@ def build_judge_prompt(
 {chr(10).join(blocks)}
 
 【评分维度】固定为：可行性、正确性、完备性、差异度，每项 0-10 分，可含小数。
+差异度只用于观察方案是否同质化，不计入总分。
 
 【任务】
 1. 给每个方案四维评分。
@@ -339,10 +347,26 @@ def parse_judgement(
         scores[label] = clean
 
     totals = {
-        label: round(sum(dims.get(dim, 0.0) for dim in DIMENSIONS) / len(DIMENSIONS), 1)
+        label: round(
+            sum(dims.get(dim, 0.0) for dim in SCORING_DIMENSIONS)
+            / len(SCORING_DIMENSIONS),
+            1,
+        )
         for label, dims in scores.items()
     }
     ranking = sorted(totals, key=lambda label: (-totals[label], label))
+    ranks = {
+        label: 1 + sum(1 for other in totals if totals[other] > totals[label])
+        for label in totals
+    }
+    groups: dict[int, list[str]] = {}
+    for label, rank in ranks.items():
+        groups.setdefault(rank, []).append(label)
+    tied = [labels for labels in groups.values() if len(labels) > 1]
+    tie = {
+        "tied_labels": [label for group in tied for label in group],
+        "note": "并列由评分相同导致，不代表优劣" if tied else "",
+    }
     judge_ranking = [
         label for label in payload.get("ranking", [])
         if isinstance(label, str) and label in valid_set
@@ -350,15 +374,15 @@ def parse_judgement(
     judge_ranking = list(dict.fromkeys(judge_ranking))
     if judge_ranking and judge_ranking != ranking:
         anomalies.append(
-            {"code": "ranking_mismatch", "detail": "裁判排名与四维总分不一致，已按总分重排"}
+            {"code": "ranking_mismatch", "detail": "裁判排名与三维总分不一致，已按总分重排"}
         )
     recommended = payload.get("recommended")
     if recommended not in valid_set:
         anomalies.append({"code": "invalid_recommended", "detail": "推荐标签无效，改用总分第一"})
         recommended = ranking[0] if ranking else None
-    if recommended and ranking and recommended != ranking[0]:
+    if recommended and ranking and ranks.get(recommended) != 1:
         anomalies.append(
-            {"code": "recommend_mismatch", "detail": "推荐方案与四维总分第一不一致"}
+            {"code": "recommend_mismatch", "detail": "推荐方案与三维总分第一不一致"}
         )
     reasons = payload.get("reasons") if isinstance(payload.get("reasons"), dict) else {}
     risks = payload.get("risks") if isinstance(payload.get("risks"), dict) else {}
@@ -376,6 +400,12 @@ def parse_judgement(
         "scores": scores,
         "totals": totals,
         "ranking": ranking,
+        "ranks": ranks,
+        "tie": tie,
+        "recommend_deviation": {
+            "matched": bool(recommended and ranking and ranks.get(recommended) == 1),
+            "reason": str(reasons.get(recommended) or ""),
+        },
         "recommended": recommended,
         "reasons": {str(key): str(value) for key, value in reasons.items()},
         "risks": {str(key): str(value) for key, value in risks.items()},
@@ -417,6 +447,7 @@ class ReviewArena:
         judge: Any,
         cfg: ReviewConfig,
         sink: EventSink | None = None,
+        run_dir: Path | None = None,
     ):
         if len(agents) < 2 or len(agents) > 8:
             raise ValueError("方案评审需要 2-8 个参赛模型")
@@ -429,9 +460,12 @@ class ReviewArena:
         assign_names([*self.agents, self.judge])
         self.cfg = cfg
         self.sink: EventSink = sink or NullSink()
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        suffix = f"-{cfg.run_id}" if cfg.run_id else ""
-        self.run_dir = (Path(cfg.out_dir) / f"{stamp}{suffix}").resolve()
+        if run_dir is not None:
+            self.run_dir = Path(run_dir).resolve()
+        else:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            suffix = f"-{cfg.run_id}" if cfg.run_id else ""
+            self.run_dir = (Path(cfg.out_dir) / f"{stamp}{suffix}").resolve()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.cancel_hook: Any = None
         self._usage: dict[str, int] = {"calls": 0, "tokens_estimate": 0}
@@ -479,6 +513,12 @@ class ReviewArena:
         self.sink.emit("review_phase", phase="answers", label="独立作答")
 
         answers = self._collect_answers(perspectives)
+        if self._is_cancelled():
+            return self._write(
+                self._result(
+                    started, t0, answers, [], {}, [], None, {}, {}, {}, "", {}, [], "用户中止"
+                )
+            )
         valid = [item for item in answers if not item.get("error")]
         absent = [
             {"agent": item["agent"], "reason": item.get("error") or "返回内容为空"}
@@ -555,6 +595,9 @@ class ReviewArena:
             risks=judged["risks"],
             rejections=judged["rejections"],
             anomalies=anomalies,
+            ranks=judged.get("ranks") or {},
+            tie=judged.get("tie") or {},
+            recommend_deviation=judged.get("recommend_deviation") or {},
         )
 
         if self._is_cancelled():
@@ -594,6 +637,8 @@ class ReviewArena:
             "",
             recommended_agent=recommended_agent,
             anomalies=anomalies,
+            tie=judged.get("tie"),
+            recommend_deviation=judged.get("recommend_deviation"),
         )
         return self._write(result)
 
@@ -606,6 +651,8 @@ class ReviewArena:
                 "text": "",
                 "elapsed": 0.0,
                 "error": None,
+                "cancelled": False,
+                "attempt": 1,
                 "struct_complete": False,
                 "missing": [],
             }
@@ -636,6 +683,7 @@ class ReviewArena:
                 timeout=self.cfg.timeout,
                 retries=self.cfg.retries,
                 on_output=on_output,
+                cancel_hook=self.cancel_hook,
             )
             self._record_usage(agent, result)
             return agent.name, result
@@ -668,6 +716,8 @@ class ReviewArena:
                             struct_complete=not missing,
                             missing=missing,
                         )
+                    row["cancelled"] = bool(result.cancelled)
+                    row["attempt"] = 1
                     self.sink.emit("review_answer_done", **row)
                 if self._is_cancelled():
                     for future in pending:
@@ -680,6 +730,189 @@ class ReviewArena:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
         return rows
+
+    def rerun_answer(self, previous: dict[str, Any], agent_name: str) -> ReviewResult:
+        """Retry one absent seat, keep prior attempts, then re-judge all valid answers."""
+        previous_answers = list(previous.get("answers") or [])
+        old = next(
+            (item for item in previous_answers if str(item.get("agent")) == agent_name),
+            None,
+        )
+        if old is None:
+            raise ValueError("战报中找不到该席位")
+        agent = next((item for item in self.agents if item.name == agent_name), None)
+        if agent is None:
+            raise ValueError("模型配置已删除，请先恢复")
+
+        old_attempt = int(old.get("attempt") or 1)
+        perspective = old.get("perspective")
+        row = {
+            "agent": agent.name,
+            "perspective": perspective,
+            "plan": {},
+            "text": "",
+            "elapsed": 0.0,
+            "error": None,
+            "cancelled": False,
+            "attempt": old_attempt + 1,
+            "struct_complete": False,
+            "missing": [],
+        }
+        self.sink.emit("review_answer_start", agent=agent.name, perspective=perspective)
+
+        def on_output(chunk: str) -> None:
+            self.sink.emit("review_answer_progress", agent=agent.name, text=chunk)
+
+        result = agent.ask(
+            build_answer_prompt(
+                proposition=self.cfg.proposition,
+                perspective=perspective,
+                background=self.cfg.background,
+                constraints=self.cfg.constraints,
+                criteria=self.cfg.criteria,
+            ),
+            timeout=self.cfg.timeout,
+            retries=self.cfg.retries,
+            on_output=on_output,
+            cancel_hook=self.cancel_hook,
+        )
+        self._record_usage(agent, result)
+        row["elapsed"] = round(result.elapsed, 1)
+        row["cancelled"] = bool(result.cancelled)
+        if result.error or not result.text.strip():
+            row["error"] = result.error or "返回内容为空"
+        else:
+            plan, missing = parse_plan(result.text)
+            row.update(
+                text=result.text.strip(),
+                plan=plan,
+                struct_complete=not missing,
+                missing=missing,
+            )
+        self.sink.emit("review_answer_done", **row)
+
+        merged = [item for item in previous_answers if str(item.get("agent")) != agent_name]
+        merged.append(row)
+        attempts = list(previous.get("attempts") or [])
+        if not attempts:
+            for item in previous_answers:
+                attempts.append(
+                    {
+                        "agent": item.get("agent"),
+                        "attempt": int(item.get("attempt") or 1),
+                        "started_at": previous.get("started_at"),
+                        "outcome": "absent" if item.get("error") else "done",
+                        "error": item.get("error") or "",
+                    }
+                )
+        attempts.append(
+            {
+                "agent": agent.name,
+                "attempt": row["attempt"],
+                "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "outcome": "absent" if row["error"] else "done",
+                "error": row["error"] or "",
+            }
+        )
+
+        started = str(previous.get("started_at") or time.strftime("%Y-%m-%d %H:%M:%S"))
+        t0 = time.monotonic()
+        valid = [
+            item for item in merged
+            if not item.get("error") and not item.get("cancelled") and item.get("text")
+        ]
+        if len(valid) < 2:
+            reason = "有效方案不足 2 份，无法进入对比评审"
+            result_obj = self._result(
+                started,
+                t0,
+                merged,
+                [],
+                {},
+                [],
+                None,
+                {},
+                {},
+                {},
+                "",
+                {},
+                [
+                    {"agent": item["agent"], "reason": item.get("error") or "返回内容为空"}
+                    for item in merged if item.get("error")
+                ],
+                reason,
+                anomalies=[{"code": "insufficient_answers", "detail": reason}],
+            )
+            result_obj.attempts = attempts
+            return self._write(result_obj)
+
+        labels = self._make_labels(valid)
+        self.sink.emit(
+            "review_labels",
+            labels=[
+                {
+                    "label": item["label"],
+                    "agent": item["agent"],
+                    "perspective": item["perspective"],
+                }
+                for item in labels
+            ],
+        )
+        judged, anomalies = self._judge(labels)
+        if judged is None:
+            result_obj = self._result(
+                started,
+                t0,
+                merged,
+                labels,
+                {},
+                [],
+                None,
+                {},
+                {},
+                {},
+                "",
+                {},
+                [],
+                "评审未完成",
+                anomalies=anomalies,
+            )
+            result_obj.attempts = attempts
+            return self._write(result_obj)
+
+        recommended = judged["recommended"]
+        label_map = {item["label"]: item for item in labels}
+        recommended_agent = str(label_map.get(recommended, {}).get("agent") or "") or None
+        synthesis, synthesis_error = self._synthesize(labels, judged)
+        if synthesis_error:
+            anomalies.append({"code": "synthesis_failed", "detail": synthesis_error})
+        result_obj = self._result(
+            started,
+            t0,
+            merged,
+            labels,
+            judged["scores"],
+            judged["ranking"],
+            recommended,
+            judged["reasons"],
+            judged["risks"],
+            judged["rejections"],
+            synthesis,
+            parse_synthesis(synthesis),
+            [
+                {"agent": item["agent"], "reason": item.get("error") or "返回内容为空"}
+                for item in merged if item.get("error")
+            ],
+            "",
+            recommended_agent=recommended_agent,
+            anomalies=anomalies,
+            tie=judged.get("tie"),
+            recommend_deviation=judged.get("recommend_deviation"),
+        )
+        result_obj.attempts = attempts
+        previous_duration = float(previous.get("duration") or 0)
+        result_obj.duration = round(previous_duration + result_obj.duration, 1)
+        return self._write(result_obj)
 
     def _make_labels(self, answers: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         shuffled = list(answers)
@@ -722,6 +955,7 @@ class ReviewArena:
                 ),
                 timeout=self.cfg.timeout,
                 retries=0,
+                cancel_hook=self.cancel_hook,
             )
             self._record_usage(self.judge, result)
             if not result.error:
@@ -747,6 +981,7 @@ class ReviewArena:
             ),
             timeout=self.cfg.timeout,
             retries=0,
+            cancel_hook=self.cancel_hook,
         )
         self._record_usage(self.judge, result)
         if result.error:
@@ -772,10 +1007,16 @@ class ReviewArena:
         *,
         recommended_agent: str | None = None,
         anomalies: Sequence[dict[str, str]] = (),
+        tie: dict[str, Any] | None = None,
+        recommend_deviation: dict[str, Any] | None = None,
     ) -> ReviewResult:
         scores = scores or {}
         totals = {
-            label: round(sum(dims.get(dim, 0.0) for dim in DIMENSIONS) / len(DIMENSIONS), 1)
+            label: round(
+                sum(dims.get(dim, 0.0) for dim in SCORING_DIMENSIONS)
+                / len(SCORING_DIMENSIONS),
+                1,
+            )
             for label, dims in scores.items()
         }
         budget = {
@@ -827,6 +1068,10 @@ class ReviewArena:
             },
             budget=budget,
             stop_reason=stop_reason,
+            judge_same_model=self.cfg.judge_same_model,
+            tie=tie or {},
+            recommend_deviation=recommend_deviation or {},
+            attempts=[],
         )
 
     def _persist(self, result: ReviewResult) -> None:
@@ -870,7 +1115,7 @@ class ReviewArena:
             f"约 {result.budget.get('tokens_estimate', 0)} tokens",
             "",
             "## 方案对比\n",
-            "| 方案 | 模型 | 视角 | " + " | ".join(DIMENSIONS) + " | 总分 |",
+            "| 方案 | 模型 | 视角 | " + " | ".join(DIMENSIONS) + " | 总分（三维） |",
             "| --- | --- | --- | " + " | ".join("---" for _ in DIMENSIONS) + " | --- |",
         ]
         label_map = {item["label"]: item for item in result.labels}
@@ -895,6 +1140,7 @@ class ReviewArena:
                 "",
                 "- 裁判仅看到匿名标签与乱序方案。",
                 "- 单裁判存在主观偏差，样本量为 1。",
+                "- 总分 = 可行性、正确性、完备性三维均值；差异度不计入总分。",
                 "- 本页评分仅在本模式内可比，不应与淘汰辩论混排。",
             ]
         )

@@ -1,7 +1,20 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from apps.arena.api import build_run_preset
-from apps.arena.schemas import ModelNameRequest
+from apps.arena import database
+from apps.arena.api import (
+    accuracy,
+    build_run_preset,
+    delete_history,
+    export_history,
+    profiles,
+    restore_history,
+)
+from apps.arena.schemas import ModelNameRequest, StartRun
+from apps.arena.services import ConflictError, Manager
 
 
 class RunPresetTest(unittest.TestCase):
@@ -106,6 +119,127 @@ class RunPresetTest(unittest.TestCase):
 
         self.assertFalse(preset["resolved"])
         self.assertEqual(preset["missing_models"][0]["name"], "B")
+
+
+class ArchiveInsightsTest(unittest.TestCase):
+    def _seed(self, root: Path) -> Path:
+        db_path = root / "arena.db"
+        run_dir = root / "runs" / "20261103-120000-run"
+        run_dir.mkdir(parents=True)
+        database.create_run(
+            run_id="run-1",
+            proposition="测试方案",
+            mode="review",
+            vote_mode="review",
+            participants=2,
+            started_at="2026-11-03 12:00:00",
+            run_dir=str(run_dir),
+            db_path=db_path,
+        )
+        database.finish_run(
+            run_id="run-1",
+            status="done",
+            winner="甲",
+            duration=90,
+            run_dir=str(run_dir),
+            db_path=db_path,
+        )
+        transcript = {
+            "mode": "review",
+            "proposition": "测试方案",
+            "judge": {"name": "裁判A", "model": "judge-a"},
+            "recommended": "方案1",
+            "recommended_agent": "甲",
+            "ranking": ["方案1", "方案2"],
+            "ranks": {"方案1": 1, "方案2": 2},
+            "participants": [
+                {"name": "甲", "config_id": 1, "model": "model-a"},
+                {"name": "乙", "config_id": 2, "model": "model-a"},
+            ],
+            "answers": [
+                {"agent": "甲", "text": "方案一", "error": None},
+                {"agent": "乙", "text": "方案二", "error": None},
+            ],
+            "labels": [
+                {"agent": "甲", "label": "方案1"},
+                {"agent": "乙", "label": "方案2"},
+            ],
+            "scores": {
+                "方案1": {"可行性": 8, "正确性": 8, "完备性": 8, "差异度": 6},
+                "方案2": {"可行性": 7, "正确性": 7, "完备性": 7, "差异度": 9},
+            },
+        }
+        (run_dir / "transcript.json").write_text(
+            json.dumps(transcript, ensure_ascii=False), encoding="utf-8"
+        )
+        (run_dir / "review.md").write_text("# 战报\n", encoding="utf-8")
+        return db_path
+
+    def test_accuracy_profiles_export_delete_and_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = self._seed(root)
+            with patch.object(database, "DB_PATH", db_path):
+                database.save_decision(
+                    run_id="run-1",
+                    decision="adopted",
+                    adopted_kind="label",
+                    adopted_ref="方案1",
+                    db_path=db_path,
+                )
+                stats = accuracy("review")
+                profile_data = profiles("review")
+                markdown = export_history("run-1", "md")
+                archive = export_history("run-1", "zip")
+                deleted = delete_history("run-1", purge_files=False)
+                hidden = database.list_runs(db_path=db_path)
+                restored = restore_history("run-1")
+
+        self.assertEqual(stats["summary"]["n_completed"], 1)
+        self.assertEqual(stats["summary"]["recommend_adopted"], 1)
+        self.assertEqual(stats["summary"]["top1_hit"], 1)
+        self.assertEqual(len(profile_data["rows"]), 2)
+        self.assertTrue(all(row["suspected_same_model"] for row in profile_data["rows"]))
+        self.assertEqual(markdown.body, b"# \xe6\x88\x98\xe6\x8a\xa5\n")
+        self.assertEqual(archive.media_type, "application/zip")
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(hidden, [])
+        self.assertEqual(restored["run"]["status"], "done")
+
+    def test_same_source_judge_is_rejected_before_run_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "arena.db"
+            with patch.object(database, "DB_PATH", db_path):
+                a = database.create_model(
+                    name="甲",
+                    base_url="http://127.0.0.1:1/v1",
+                    api_key="a",
+                    model="same-model",
+                    db_path=db_path,
+                )
+                b = database.create_model(
+                    name="乙",
+                    base_url="http://127.0.0.1:1/v1",
+                    api_key="b",
+                    model="same-model",
+                    db_path=db_path,
+                )
+                judge = database.create_model(
+                    name="裁判",
+                    base_url="http://127.0.0.1:1/v1",
+                    api_key="c",
+                    model="same-model",
+                    db_path=db_path,
+                )
+                payload = StartRun.model_validate({
+                    "proposition": "测试",
+                    "mode": "review",
+                    "model_ids": [a["id"], b["id"]],
+                    "judge_model_id": judge["id"],
+                })
+                with self.assertRaisesRegex(ConflictError, "同源"):
+                    Manager().start(payload)
+                self.assertEqual(database.list_runs(db_path=db_path), [])
 
 
 if __name__ == "__main__":

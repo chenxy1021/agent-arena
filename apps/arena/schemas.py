@@ -39,3 +39,15 @@ class StartRun(BaseModel):
     background: str = Field(default="", max_length=4000)
     constraints: list[str] = Field(default_factory=list, max_length=20)
     criteria: list[str] = Field(default_factory=list, max_length=20)
+
+
+class DecisionCreate(BaseModel):
+    decision: Literal["adopted", "partial", "rejected", "undecided"]
+    adopted_kind: str | None = None
+    adopted_ref: str | None = None
+    reason_code: str | None = None
+    note: str = Field(default="", max_length=2000)
+
+
+class SeatRetryRequest(BaseModel):
+    agent: str = Field(min_length=1, max_length=120)

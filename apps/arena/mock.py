@@ -83,6 +83,7 @@ class MockAgent:
         timeout: float = 0,
         retries: int = 0,
         on_output=None,
+        **_kwargs,
     ) -> CallResult:
         started = time.monotonic()
         time.sleep(self.rng.uniform(0.05, 0.35))

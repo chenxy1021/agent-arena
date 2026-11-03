@@ -55,6 +55,7 @@ class Speech:
     elapsed: float
     error: str | None = None
     stance: int | None = None
+    cancelled: bool = False
 
 
 @dataclass
@@ -807,7 +808,7 @@ class Arena:
             )
 
     def _after_speech(self, record: RoundRecord, speech: Speech, rnd: int) -> None:
-        if speech.error:
+        if speech.error or speech.cancelled:
             return
         added = self._add_claims(speech.agent, speech.text, rnd, speech.stance)
         if added:
@@ -823,6 +824,21 @@ class Arena:
         return list(items[k:]) + list(items[:k])
 
     def _record_speech(self, rnd: int, agent: Any, role: str, res: CallResult) -> Speech:
+        if res.cancelled:
+            stance = extract_stance(res.text)
+            self.sink.emit(
+                "speech",
+                agent=agent.name,
+                role=role,
+                text=res.text,
+                elapsed=res.elapsed,
+                error=None,
+                stance=stance,
+                cancelled=True,
+            )
+            return Speech(
+                rnd, agent.name, role, res.text, res.elapsed, None, stance, cancelled=True
+            )
         if res.error:
             self._fail_streak[agent.name] = self._fail_streak.get(agent.name, 0) + 1
             speech = Speech(rnd, agent.name, role, "", res.elapsed, res.error)
@@ -851,6 +867,12 @@ class Arena:
                 self.sink.emit("model_output", agent=agent.name, role=role, text=chunk)
 
         sink = on_output or default_output
+        captured: list[str] = []
+
+        def capture(chunk: str) -> None:
+            if chunk:
+                captured.append(chunk)
+            sink(chunk)
 
         pool = ThreadPoolExecutor(max_workers=1)
         future = pool.submit(
@@ -858,14 +880,22 @@ class Arena:
             prompt,
             timeout=self.cfg.timeout,
             retries=self.cfg.retries,
-            on_output=sink,
+            on_output=capture,
+            cancel_hook=self.cancel_hook,
         )
         try:
             started = time.monotonic()
             while not future.done():
                 if self._cancelled():
                     self._stopped = True
-                    return CallResult(error="用户中止")
+                    try:
+                        return future.result(timeout=0.3)
+                    except Exception:
+                        return CallResult(
+                            text="".join(captured).strip(),
+                            elapsed=round(time.monotonic() - started, 1),
+                            cancelled=True,
+                        )
                 try:
                     return future.result(timeout=interval)
                 except FutureTimeout:
@@ -959,8 +989,12 @@ class Arena:
                 prompt,
                 timeout=min(self.cfg.timeout, 90),
                 retries=0,
+                cancel_hook=self.cancel_hook,
             )
-            if res.error:
+            if res.cancelled:
+                self._stopped = True
+                last_err = "用户中止"
+            elif res.error:
                 last_err = res.error
             else:
                 target, reason, scores = parse_ballot(res.text, names, agent.name)

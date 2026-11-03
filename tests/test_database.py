@@ -47,8 +47,70 @@ class HistoryDatabaseTest(unittest.TestCase):
                 columns = {
                     row["name"] for row in conn.execute("PRAGMA table_info(runs)")
                 }
+                version = conn.execute("PRAGMA user_version").fetchone()[0]
 
         self.assertIn("mode", columns)
+        self.assertEqual(version, 1)
+
+    def test_decision_history_and_revert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "arena.db"
+            database.create_run(
+                run_id="run-1",
+                proposition="测试",
+                mode="review",
+                vote_mode="review",
+                participants=2,
+                started_at="2026-01-01 12:00:00",
+                db_path=db_path,
+            )
+            database.finish_run(run_id="run-1", status="done", db_path=db_path)
+            first = database.save_decision(
+                run_id="run-1",
+                decision="adopted",
+                adopted_kind="label",
+                adopted_ref="方案1",
+                db_path=db_path,
+            )
+            database.revert_decision("run-1", db_path=db_path)
+            second = database.save_decision(
+                run_id="run-1",
+                decision="rejected",
+                reason_code="infeasible",
+                note="成本无法接受",
+                db_path=db_path,
+            )
+            latest = database.latest_decision("run-1", db_path=db_path)
+            history = database.decision_history("run-1", db_path=db_path)
+            run = database.get_run("run-1", db_path=db_path)
+
+        self.assertEqual(first["version"], 1)
+        self.assertEqual(second["version"], 2)
+        self.assertEqual(latest["decision"], "rejected")
+        self.assertEqual(len(history), 2)
+        self.assertIsNotNone(history[1]["reverted_at"])
+        self.assertEqual(run["decision"], "rejected")
+
+    def test_soft_delete_hides_run_and_restore_keeps_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "arena.db"
+            database.create_run(
+                run_id="run-1",
+                proposition="测试",
+                vote_mode="eliminate",
+                participants=2,
+                started_at="2026-01-01 12:00:00",
+                db_path=db_path,
+            )
+            database.finish_run(run_id="run-1", status="cancelled", db_path=db_path)
+            database.soft_delete_run("run-1", db_path=db_path)
+            hidden = database.list_runs(db_path=db_path)
+            deleted = database.get_run("run-1", db_path=db_path)
+            restored = database.restore_run("run-1", db_path=db_path)
+
+        self.assertEqual(hidden, [])
+        self.assertEqual(deleted["status"], "deleted")
+        self.assertEqual(restored["status"], "cancelled")
 
 
 class ModelDatabaseTest(unittest.TestCase):
@@ -82,6 +144,7 @@ class ModelDatabaseTest(unittest.TestCase):
         self.assertNotIn("api_key", rows[0])
         self.assertEqual(rows[0]["has_api_key"], 1)
         self.assertEqual(full["api_key"], "secret-key")
+        self.assertEqual(full["model_key_norm"], "model-a")
         self.assertEqual(updated["name"], "模型B")
         self.assertEqual(updated["api_key"], "secret-key")
         self.assertEqual(updated["temperature"], 0.8)

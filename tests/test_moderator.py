@@ -108,7 +108,7 @@ class TiebreakVoteTest(unittest.TestCase):
             name = "slow"
             label = "slow"
 
-            def ask(self, prompt, timeout=0, retries=0, on_output=None):
+            def ask(self, prompt, timeout=0, retries=0, on_output=None, **_kwargs):
                 time.sleep(0.8)
                 return CallResult(text="late")
 
@@ -125,7 +125,7 @@ class TiebreakVoteTest(unittest.TestCase):
             result = arena._ask_with_progress(arena.agents[0], "prompt", "发言")
             elapsed = time.monotonic() - started
 
-        self.assertEqual(result.error, "用户中止")
+        self.assertTrue(result.cancelled)
         self.assertLess(elapsed, 0.6)
 
     def test_failed_judge_ballot_is_retried_before_tiebreak(self) -> None:
@@ -136,7 +136,7 @@ class TiebreakVoteTest(unittest.TestCase):
                 self.ballots = ballots
                 self.calls = 0
 
-            def ask(self, prompt, timeout=0, retries=0, on_output=None):
+            def ask(self, prompt, timeout=0, retries=0, on_output=None, **_kwargs):
                 self.calls += 1
                 text = self.ballots[min(self.calls - 1, len(self.ballots) - 1)]
                 return CallResult(text=text)

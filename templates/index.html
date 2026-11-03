@@ -279,7 +279,8 @@
 
             <div v-if="runMode === 'review'" class="rule__section">
               <label class="rule__label" for="judge-model">独立裁判</label>
-              <select id="judge-model" class="mode-select" v-model="reviewJudgeId">
+              <select id="judge-model" class="mode-select" v-model="reviewJudgeId"
+                @change="sameSourceWarning = ''">
                 <option :value="''" disabled>
                   {{ judgeCandidates.length ? '选择不参赛的模型' : '没有可用裁判模型' }}
                 </option>
@@ -302,6 +303,14 @@
                 </span>
                 <input type="checkbox" v-model="diversify">
               </label>
+            </div>
+
+            <div class="rule__section">
+              <span class="rule__label">成本预估</span>
+              <p class="rule__note rule__note--sm">{{ reviewEstimate }}</p>
+              <p v-if="sameSourceWarning" class="rule__note rule__note--sm bad">
+                {{ sameSourceWarning }} 请更换裁判后重新开始。
+              </p>
             </div>
 
             <div class="rule__section">
@@ -410,6 +419,44 @@
         </span>
       </div>
 
+      <section v-if="decisionRunId && !running" class="decision-bar decision-bar--venue" aria-label="决策记录">
+        <div class="decision-bar__head">
+          <b>{{ decision ? '这场结论已记录' : '这场结论你打算怎么处理？' }}</b>
+          <span v-if="decision">
+            {{ decision.decision === 'adopted' ? '已采纳'
+              : decision.decision === 'partial' ? '部分采纳'
+              : decision.decision === 'rejected' ? '已驳回' : '暂不采纳' }}
+          </span>
+        </div>
+        <div v-if="!decision" class="decision-bar__actions">
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('adopted')">采纳推荐</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('partial')">部分采纳</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('rejected')">驳回</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('undecided')">暂不采纳</button>
+        </div>
+        <div v-else class="decision-bar__actions">
+          <button type="button" :disabled="decisionBusy" @click="revertDecision">撤销并重新记录</button>
+        </div>
+        <div v-if="!decision && decisionSourceOptions.length" class="decision-sources">
+          <span>部分采纳时吸收来源（可多选）</span>
+          <label v-for="option in decisionSourceOptions" :key="'venue-source-' + option.value">
+            <input v-model="decisionSources" type="checkbox" :value="option.value">
+            <span>{{ option.label }}</span>
+          </label>
+        </div>
+        <div v-if="!decision" class="decision-bar__note">
+          <input v-model="decisionNote" maxlength="2000"
+            placeholder="备注（部分采纳 / 驳回至少 5 个字）">
+          <select v-model="decisionReason" class="mode-select" aria-label="驳回原因">
+            <option value="">驳回原因（可选）</option>
+            <option value="infeasible">不可行</option>
+            <option value="insufficient">信息不足</option>
+            <option value="alternative">已另有方案</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+      </section>
+
       <div v-if="runMode === 'review'" class="review-stage">
         <template v-if="participants.length">
           <header class="review-stage__head">
@@ -478,6 +525,13 @@
               <section v-if="reviewBlocked" class="review-warnings">
                 <p>评审已停止：{{ reviewBlocked }}</p>
               </section>
+              <section v-if="reviewTieText" class="review-warnings">
+                <p>并列：{{ reviewTieText }}（评分相同，不代表优劣）</p>
+              </section>
+              <section v-if="reviewDeviation" class="review-warnings">
+                <p>裁判推荐：{{ reviewDeviation.recommended }}（总分非第一），第一为 {{ reviewDeviation.first }}</p>
+                <p>{{ reviewDeviation.reason || '推荐依据不足' }}</p>
+              </section>
               <section class="review-verdict__hero" :class="{ ready: reviewJudgeResult }">
                 <span>RECOMMENDATION</span>
                 <b>{{ reviewRecommendedAgent || '等待评审' }}</b>
@@ -498,7 +552,7 @@
                       <tr>
                         <th scope="col">方案</th>
                         <th v-for="dim in reviewDimensions" :key="dim" scope="col">{{ dim }}</th>
-                        <th scope="col">总分</th>
+                        <th scope="col">三维总分</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -506,7 +560,7 @@
                         :class="{ recommended: row.label === reviewJudgeResult?.recommended }">
                         <th scope="row">
                           <b>{{ row.agent }}</b>
-                          <small>{{ row.label }} · {{ row.perspective || '未分配' }}</small>
+                          <small>{{ row.label }} · {{ row.perspective || '未分配' }} · 第 {{ row.rank }} 名<template v-if="row.tied"> · 并列</template></small>
                         </th>
                         <td v-for="dim in reviewDimensions" :key="row.label + dim" class="mono">
                           {{ row.dims[dim] ?? '—' }}
@@ -545,7 +599,7 @@
               </section>
             </aside>
           </div>
-          <p class="review-stage__foot">匿名评审、顺序已打乱、单裁判主观偏差；样本量为 1，请结合方案全文判断。</p>
+          <p class="review-stage__foot">总分 = 可行性、正确性、完备性三维均值；差异度只做同质化标注。匿名评审、单裁判主观偏差；样本量为 1，请结合方案全文判断。</p>
         </template>
         <div v-else class="council-empty">
           <span class="council-empty__eyebrow">Review chamber</span>
@@ -857,6 +911,19 @@
             type="button" class="ghost-button" @click="reuseHistoryRun(viewingHistoryId)">
             再赛一场
           </button>
+          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
+            type="button" class="ghost-button" @click="exportRun('md')">导出 MD</button>
+          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
+            type="button" class="ghost-button" @click="exportRun('json')">JSON</button>
+          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
+            type="button" class="ghost-button" @click="exportRun('zip')">ZIP</button>
+          <button v-if="viewingRunStatus === 'deleted'" type="button" class="ghost-button"
+            @click="restoreCurrentRun">恢复档案</button>
+          <button v-else-if="viewingHistoryId && viewingHistoryId !== 'demo'"
+            type="button" class="ghost-button" @click="deleteCurrentRun(false)">删除档案</button>
+          <button v-if="viewingRunStatus !== 'deleted' && viewingHistoryId && viewingHistoryId !== 'demo'"
+            type="button" class="text-action text-action--danger"
+            @click="deleteCurrentRun(true)">删除档案与文件</button>
           <div class="chips">
             <span class="chips__label">按人</span>
             <button type="button" class="chip" :class="{ active: !recordAgentFilter }"
@@ -867,6 +934,52 @@
           </div>
         </div>
       </header>
+
+      <section v-if="decisionRunId" class="decision-bar" aria-label="决策记录">
+        <div class="decision-bar__head">
+          <b>{{ decision ? '已记录决策' : '这场结论你打算怎么处理？' }}</b>
+          <span v-if="decision">
+            {{ decision.decision === 'adopted' ? '已采纳'
+              : decision.decision === 'partial' ? '部分采纳'
+              : decision.decision === 'rejected' ? '已驳回' : '暂不采纳' }}
+            · 可修改
+          </span>
+        </div>
+        <div v-if="!decision" class="decision-bar__actions">
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('adopted')">采纳推荐</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('partial')">部分采纳</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('rejected')">驳回</button>
+          <button type="button" :disabled="decisionBusy" @click="submitDecision('undecided')">暂不采纳</button>
+        </div>
+        <div v-else class="decision-bar__actions">
+          <button type="button" :disabled="decisionBusy" @click="revertDecision">撤销并重新记录</button>
+        </div>
+        <div v-if="!decision && decisionSourceOptions.length" class="decision-sources">
+          <span>部分采纳时吸收来源（可多选）</span>
+          <label v-for="option in decisionSourceOptions" :key="'record-source-' + option.value">
+            <input v-model="decisionSources" type="checkbox" :value="option.value">
+            <span>{{ option.label }}</span>
+          </label>
+        </div>
+        <div class="decision-bar__note">
+          <input v-model="decisionNote" maxlength="2000"
+            placeholder="备注（部分采纳 / 驳回至少 5 个字）">
+          <select v-if="!decision" v-model="decisionReason" class="mode-select" aria-label="驳回原因">
+            <option value="">驳回原因（可选）</option>
+            <option value="infeasible">不可行</option>
+            <option value="insufficient">信息不足</option>
+            <option value="alternative">已另有方案</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <ul v-if="decisionHistory.length" class="decision-history" aria-label="决策历史">
+          <li v-for="item in decisionHistory" :key="'decision-' + item.id">
+            <span>{{ decisionLabel(item.decision) }}</span>
+            <small>{{ item.note || '无备注' }}</small>
+            <em v-if="item.reverted_at">已撤销</em>
+          </li>
+        </ul>
+      </section>
 
       <div v-if="runMode === 'review' || roundsNewestFirst.length" class="record-overview">
         <div class="record-overview__identity">
@@ -905,13 +1018,22 @@
           <div class="record-mode-badge">方案评审 · 不可与辩论混排</div>
         </header>
 
+        <div v-if="reviewTieText" class="review-warnings">
+          <p>并列：{{ reviewTieText }}（评分相同，不代表优劣）</p>
+        </div>
+        <div v-if="reviewDeviation" class="review-warnings">
+          <p>裁判推荐 {{ reviewDeviation.recommended }}，但总分第一是 {{ reviewDeviation.first }}。</p>
+          <p>{{ reviewDeviation.reason || '推荐依据不足' }}</p>
+        </div>
+
         <div class="review-record__grid">
           <article v-for="row in reviewScoreRows" :key="'record-score-' + row.label"
             class="review-record-card" :class="{ recommended: row.label === reviewJudgeResult?.recommended }"
             :style="{ '--team-color': agentColor(row.agent) }">
             <header>
-              <span>{{ row.label }} · {{ row.perspective || '未分配视角' }}</span>
-              <em v-if="row.label === reviewJudgeResult?.recommended">推荐</em>
+              <span>{{ row.label }} · {{ row.perspective || '未分配视角' }} · 第 {{ row.rank }} 名</span>
+              <em v-if="row.tied">并列</em>
+              <em v-else-if="row.label === reviewJudgeResult?.recommended">推荐</em>
             </header>
             <h3>{{ row.agent }}</h3>
             <p>{{ reviewAnswerFor(row.agent)?.plan?.claim || '—' }}</p>
@@ -939,6 +1061,10 @@
           <article v-for="row in reviewRows" :key="'record-plan-' + row.agent">
             <h3>{{ row.agent }} · {{ row.perspective || '未分配视角' }}</h3>
             <p v-if="row.error" class="record-error">{{ row.error }}</p>
+            <p v-else-if="row.cancelled" class="record-error">
+              已中止（部分产出）
+              <template v-if="row.text"><br>{{ row.text }}</template>
+            </p>
             <div v-else class="speech-block__body">
               <div v-for="field in reviewPlanFields(row)" :key="row.agent + 'rf-' + field.key"
                 class="speech-block__para">
@@ -951,12 +1077,16 @@
         <p v-if="reviewAbsent.length || reviewAnomalies.length" class="review-record__warnings">
           <span v-for="item in reviewAbsent" :key="'record-absent-' + item.agent">
             缺席：{{ item.agent }} · {{ item.reason }}
+            <button type="button" class="row-action" :disabled="Boolean(retryingSeat)"
+              @click="retrySeat(item.agent)">
+              {{ retryingSeat === item.agent ? '重跑中…' : '重跑此席位' }}
+            </button>
           </span>
           <span v-for="(item, index) in reviewAnomalies" :key="'record-anomaly-' + index">
             {{ item.detail }}
           </span>
         </p>
-        <p class="review-stage__foot">匿名评审、顺序已打乱、单裁判主观偏差；样本量为 1。</p>
+        <p class="review-stage__foot">总分 = 三维均值，差异度不计入总分。匿名评审、单裁判主观偏差；样本量为 1。</p>
       </section>
 
       <div v-if="runMode !== 'review' && roundsNewestFirst.length" class="record-layout">
@@ -1033,6 +1163,10 @@
                 <time>{{ Number(speech.elapsed || 0).toFixed(1) }}s</time>
               </header>
               <div v-if="speech.error" class="record-error">未完成：{{ speech.error }}</div>
+              <div v-else-if="speech.cancelled" class="record-error">
+                已中止（部分产出）
+                <template v-if="speech.text"><br>{{ speech.text }}</template>
+              </div>
               <div v-else class="speech-block__body">
                 <div v-for="(block, bi) in speechBlocks(speech.text)" :key="bi"
                   class="speech-block__para" :class="{ gap: bi > 0 }">
@@ -1171,12 +1305,52 @@
         </label>
         <div class="archive-mode-filter" role="group" aria-label="按模式筛选">
           <button type="button" :class="{ active: archiveScope === 'all' }"
-            @click="archiveScope = 'all'">全部模式</button>
+            @click="archiveScope = 'all'; loadArchiveInsights()">全部模式</button>
           <button type="button" :class="{ active: archiveScope === 'review' }"
-            @click="archiveScope = 'review'">方案评审</button>
+            @click="archiveScope = 'review'; loadArchiveInsights()">方案评审</button>
           <button type="button" :class="{ active: archiveScope === 'debate' }"
-            @click="archiveScope = 'debate'">淘汰辩论</button>
+            @click="archiveScope = 'debate'; loadArchiveInsights()">淘汰辩论</button>
         </div>
+      </section>
+
+      <section v-if="accuracy && archiveScope !== 'all'" class="accuracy-panel">
+        <header>
+          <div>
+            <span>DECISION ACCURACY</span>
+            <h2>准确率 · {{ modeLabel(archiveScope) }}</h2>
+          </div>
+          <button type="button" class="row-action" @click="loadAccuracy">
+            {{ accuracyLoading ? '读取中…' : '刷新' }}
+          </button>
+        </header>
+        <div class="accuracy-metrics">
+          <span><small>完成</small><b>{{ accuracy.summary.n_completed }}</b></span>
+          <span><small>已决策</small><b>{{ accuracy.summary.n_decided }}</b></span>
+          <span><small>回填率</small><b>{{ accuracy.summary.n_completed
+            ? Math.round(accuracy.summary.n_decided / accuracy.summary.n_completed * 100) + '%'
+            : '—' }}</b></span>
+          <span><small>推荐采纳</small><b>{{ accuracy.summary.recommend_adopted }}</b></span>
+          <span><small>Top-1 命中</small><b>{{ accuracy.summary.top1_hit }}</b></span>
+        </div>
+        <div v-if="accuracy.summary.n_decided === 0" class="accuracy-empty">
+          完成一场并记录决策后开始统计。
+        </div>
+        <ul v-else class="accuracy-rows">
+          <li v-for="row in accuracy.rows" :key="'acc-' + row.judge_model"
+            role="button" tabindex="0" @click="archiveSearch = row.judge_model"
+            @keydown.enter.prevent="archiveSearch = row.judge_model">
+            <b>{{ row.judge_model }}</b>
+            <span>n={{ row.n_decided }} / 完成 {{ row.n_completed }}</span>
+            <span>采纳 {{ row.recommend_adopted }}</span>
+            <span>Top-1 {{ row.top1_hit }}</span>
+            <span>驳回 {{ row.rejected }}</span>
+            <em v-if="row.n_decided >= 5">
+              推荐采纳率 {{ Math.round(row.recommend_adopted / row.n_decided * 100) }}%
+            </em>
+            <em v-else>样本不足 5，仅显示计数</em>
+          </li>
+        </ul>
+        <p class="accuracy-note">口径：只统计完成场次；采纳率反映用户是否认同，不等价于方案正确率。</p>
       </section>
 
       <div v-if="archiveMode === 'compare'" class="compare-view">
@@ -1230,15 +1404,21 @@
             <thead>
               <tr>
                 <th scope="col">模型</th>
-                <th scope="col">登场</th>
-                <th scope="col">胜率</th>
+                <th scope="col">有效 / 出场</th>
+                <th scope="col">胜场</th>
+                <th scope="col">均分</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="profile in modelProfiles" :key="'mp-' + profile.name">
-                <th scope="row">{{ profile.name }}</th>
-                <td class="mono">{{ profile.runs }}</td>
-                <td class="mono">{{ profile.winRate }}%</td>
+              <tr v-for="profile in modelProfiles" :key="'mp-' + (profile.identity_key || profile.name)">
+                <th scope="row">
+                  {{ profile.name }}
+                  <small>{{ profile.model || '—' }}</small>
+                  <em v-if="profile.suspected_same_model">疑似同源配置</em>
+                </th>
+                <td class="mono">{{ profile.valid ?? profile.runs }} / {{ profile.appearances ?? profile.runs }}</td>
+                <td class="mono">{{ profile.wins }}<small>n={{ profile.valid ?? profile.runs }}</small></td>
+                <td class="mono">{{ profile.avg_score ?? profile.avgScore ?? '—' }}</td>
               </tr>
             </tbody>
           </table>
@@ -1261,6 +1441,8 @@
               <i aria-hidden="true"></i>{{ historyStatus(item) }}
             </span>
             <span class="record-mode-badge">{{ modeLabel(item.mode) }}</span>
+            <span v-if="item.status === 'done' && (!item.decision || item.decision === 'pending')"
+              class="record-mode-badge">待决策</span>
             <time>{{ (item.started_at || '').slice(5, 16) || '—' }}</time>
             <button type="button" class="archive-compare-toggle"
               :class="{ active: compareIds.includes(item.id) }"

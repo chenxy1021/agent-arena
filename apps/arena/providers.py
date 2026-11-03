@@ -7,13 +7,28 @@ import random
 import re
 import socket
 import time
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .agent import CallResult
 
 OutputCallback = Callable[[str], None]
+
+
+class _RunCancelled(Exception):
+    def __init__(self, text: str):
+        super().__init__("用户中止")
+        self.text = text
+
+
+def _is_cancelled(cancel_hook: Any) -> bool:
+    if cancel_hook is None:
+        return False
+    try:
+        return bool(cancel_hook.is_set())
+    except AttributeError:
+        return bool(cancel_hook)
 
 
 def completions_url(base_url: str) -> str:
@@ -40,10 +55,13 @@ def _read_stream(
     lines: Iterable[bytes | str],
     on_output: OutputCallback | None,
     usage: dict[str, int] | None = None,
+    cancel_hook: Any = None,
 ) -> str:
     reasoning_parts: list[str] = []
     content_parts: list[str] = []
     for raw_line in lines:
+        if _is_cancelled(cancel_hook):
+            raise _RunCancelled("".join(content_parts) or "".join(reasoning_parts))
         line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
         line = line.strip()
         if not line.startswith("data:"):
@@ -129,17 +147,26 @@ class ApiModelAgent:
         timeout: float = 240,
         retries: int = 1,
         on_output: OutputCallback | None = None,
+        cancel_hook: Any = None,
     ) -> CallResult:
         last_error = ""
         for _ in range(retries + 1):
+            if _is_cancelled(cancel_hook):
+                return CallResult(cancelled=True)
             started = time.monotonic()
             try:
                 usage: dict[str, int] = {}
-                text = self._invoke(prompt, timeout, on_output, usage)
+                text = self._invoke(prompt, timeout, on_output, usage, cancel_hook)
                 return CallResult(
                     text=text.strip(),
                     elapsed=time.monotonic() - started,
                     usage=usage,
+                )
+            except _RunCancelled as exc:
+                return CallResult(
+                    text=exc.text.strip(),
+                    elapsed=time.monotonic() - started,
+                    cancelled=True,
                 )
             except HTTPError as exc:
                 last_error = f"API {exc.code}：{_error_message(exc)}"
@@ -159,6 +186,7 @@ class ApiModelAgent:
         timeout: float,
         on_output: OutputCallback | None,
         usage: dict[str, int] | None = None,
+        cancel_hook: Any = None,
     ) -> str:
         messages: list[dict[str, str]] = []
         if self.system_prompt:
@@ -186,7 +214,7 @@ class ApiModelAgent:
         with urlopen(request, timeout=timeout) as response:
             content_type = response.headers.get("Content-Type", "")
             if "text/event-stream" in content_type:
-                return _read_stream(response, on_output, usage)
+                return _read_stream(response, on_output, usage, cancel_hook)
             raw = response.read().decode("utf-8", errors="replace")
 
         try:

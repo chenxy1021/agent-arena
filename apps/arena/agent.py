@@ -11,3 +11,4 @@ class CallResult:
     elapsed: float = 0.0
     error: str | None = None
     usage: dict[str, int] = field(default_factory=dict)
+    cancelled: bool = False
