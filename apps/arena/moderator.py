@@ -16,7 +16,13 @@ import json
 import re
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeout,
+    as_completed,
+    wait,
+)
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -481,6 +487,8 @@ class Arena:
                 self._speak_sequential(order, active, eliminated, record, rnd, prior_speeches)
 
             if self._stopped:
+                self._stop_reason = "用户中止"
+                self.sink.emit("stopped", reason="用户中止")
                 rounds.append(record)
                 self._rounds_cache.append(record)
                 break
@@ -540,6 +548,12 @@ class Arena:
             out, n_votes, tiebreak = self._resolve_vote(
                 voters, active, record, eliminated, rnd
             )
+            if self._stopped:
+                self._stop_reason = "用户中止"
+                self.sink.emit("stopped", reason="用户中止")
+                rounds.append(record)
+                self._rounds_cache.append(record)
+                break
             if converged:
                 record.tiebreak = "因收敛提前收束，按本轮评分与票数选出建议胜者"
                 rounds.append(record)
@@ -838,16 +852,20 @@ class Arena:
 
         sink = on_output or default_output
 
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                agent.ask,
-                prompt,
-                timeout=self.cfg.timeout,
-                retries=self.cfg.retries,
-                on_output=sink,
-            )
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(
+            agent.ask,
+            prompt,
+            timeout=self.cfg.timeout,
+            retries=self.cfg.retries,
+            on_output=sink,
+        )
+        try:
             started = time.monotonic()
             while not future.done():
+                if self._cancelled():
+                    self._stopped = True
+                    return CallResult(error="用户中止")
                 try:
                     return future.result(timeout=interval)
                 except FutureTimeout:
@@ -858,6 +876,8 @@ class Arena:
                         elapsed=round(time.monotonic() - started, 1),
                     )
             return future.result()
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _check_technicals(self, active: Sequence[Any]) -> list[dict[str, str]]:
         if len(active) <= 2:
@@ -905,6 +925,9 @@ class Arena:
             weight = judge_weight if is_judge else 1.0
             if weight <= 0:
                 return Vote(rnd, agent.name, None, "", "有效权重为 0，未调用", is_judge, stage, 0)
+            if self._cancelled():
+                self._stopped = True
+                return Vote(rnd, agent.name, None, "", "用户中止", is_judge, stage, 0)
             self.sink.emit(
                 "voting",
                 round_no=rnd,
@@ -971,22 +994,31 @@ class Arena:
 
         votes: list[Vote] = []
         # 所有投票者同时提交，慢模型不会阻塞其他人。
-        with ThreadPoolExecutor(max_workers=max(1, len(voters))) as pool:
-            futures = {pool.submit(task, a): a for a in voters}
-            for fut in as_completed(futures):
-                agent = futures[fut]
-                try:
-                    votes.append(fut.result())
-                except Exception as exc:
-                    self.sink.emit(
-                        "voting",
-                        round_no=rnd,
-                        stage=stage,
-                        voter=agent.name,
-                        status="error",
-                        error=str(exc),
-                    )
-                    votes.append(Vote(rnd, agent.name, None, "", str(exc), stage=stage))
+        pool = ThreadPoolExecutor(max_workers=max(1, len(voters)))
+        futures = {pool.submit(task, a): a for a in voters}
+        pending = set(futures)
+        try:
+            while pending:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    agent = futures[fut]
+                    try:
+                        votes.append(fut.result())
+                    except Exception as exc:
+                        self.sink.emit(
+                            "voting",
+                            round_no=rnd,
+                            stage=stage,
+                            voter=agent.name,
+                            status="error",
+                            error=str(exc),
+                        )
+                        votes.append(Vote(rnd, agent.name, None, "", str(exc), stage=stage))
+                if self._cancelled():
+                    self._stopped = True
+                    break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         votes = [vote for vote in votes if vote.weight > 0]
         votes.sort(key=lambda v: (not v.is_judge, v.voter))
         return votes
@@ -1091,8 +1123,34 @@ class Arena:
         self._emit_scores(record.scores, rnd)
 
         out, n_votes, tiebreak = self._decide(counts, active, record.speeches, record)
+
+        # 有人没投出有效票造成的平票，先让这些投票人补投一次，避免误入加赛。
+        missing_voters = [
+            voter for voter in voters
+            if not any(v.voter == voter.name and v.target for v in votes)
+        ]
+        if out is None and counts and missing_voters and not self._cancelled():
+            retry_votes = self._collect_votes(
+                missing_voters, active, record.speeches, eliminated, rnd
+            )
+            recovered = [vote for vote in retry_votes if vote.target]
+            if recovered:
+                votes = [vote for vote in votes if vote.target] + recovered
+                counts = self._weighted_counts(votes)
+                record.votes = votes
+                record.counts = dict(counts)
+                record.weight_breakdown = self._weight_breakdown(votes)
+                record.scores = self._aggregate_scores(votes)
+                self._emit_votes(votes, counts, rnd, "main")
+                self._emit_scores(record.scores, rnd)
+                out, n_votes, tiebreak = self._decide(
+                    counts, active, record.speeches, record
+                )
+
         if out is not None or not counts:
             return out, n_votes, tiebreak
+        if self._cancelled():
+            return None, 0, "用户中止"
 
         tied_names, _ = self._edge_names(counts, active)
         tied_agents = [a for a in active if a.name in set(tied_names)]
@@ -1105,6 +1163,8 @@ class Arena:
         attempt = 0
 
         while True:
+            if self._cancelled():
+                return None, 0, "用户中止"
             attempt += 1
             stage = f"tiebreak-{attempt}"
             step: dict[str, Any] = {
@@ -1244,7 +1304,9 @@ class Arena:
             return by_name.get(tied[0]), edge, None
 
         if allow_tiebreak:
-            return None, edge, f"{len(tied)} 人平票（各 {edge:g} 票），进入加赛"
+            missing = [v.voter for v in (record.votes if record else []) if not v.target]
+            note = f"，{len(missing)} 人未投票" if missing else ""
+            return None, edge, f"{len(tied)} 人平票（各 {edge:g} 票{note}），进入加赛"
 
         return self._decide_tiebreak(tied, edge, by_name, record, speeches)
 

@@ -384,9 +384,9 @@
           </span>
           <span class="council-hud__clock"><rolling-number :text="elapsedText"></rolling-number></span>
           <button type="button" class="stop-button" :class="{ armed: stopArmed }"
-            :disabled="!running" :aria-live="assertive"
+            :disabled="!running || stopping" :aria-live="assertive"
             @click="stopMatch">
-            {{ stopArmed ? '确认停止' : '停止本场' }}
+            {{ stopping ? '停止中…' : stopArmed ? '确认停止' : '停止本场' }}
           </button>
         </div>
       </div>

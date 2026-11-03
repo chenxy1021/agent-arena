@@ -582,6 +582,7 @@ Vue.createApp({
       roundScores: {},
       scoreSort: 'avg',
       stopArmed: false,
+      stopping: false,
       archiveMode: 'ledger',
       compareIds: [],
       models: [],
@@ -2345,6 +2346,7 @@ Vue.createApp({
       this.claims = [];
       this.roundScores = {};
       this.stopArmed = false;
+      this.stopping = false;
       window.clearTimeout(this._fxTimer);
       window.clearTimeout(this._hitTimer);
       window.clearTimeout(this._waitingTimer);
@@ -2462,8 +2464,19 @@ Vue.createApp({
         return;
       }
       try {
-        await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
-        this.liveLabel = '正在停止，保留已完成轮次';
+        const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
+        if (!res.ok) {
+          this.stopping = false;
+          this.running = false;
+          this.status = 'done';
+          this.statusText = '已结束';
+          this.liveLabel = '本场已经结束，无需停止';
+          this.stopTimer();
+          return;
+        }
+        this.stopping = true;
+        this.liveLabel = '正在停止，等待当前调用收尾…';
+        this.beginStage('', '正在停止');
       } catch (err) {
         this.hint = `停止失败：${err.message}`;
         this.hintError = true;
@@ -3564,6 +3577,7 @@ Vue.createApp({
 
         case 'stopped': {
           this.running = false;
+          this.stopping = false;
           this.status = 'cancelled';
           this.statusText = '已停止';
           this.stopReason = ev.reason || '用户中止';
@@ -3592,6 +3606,7 @@ Vue.createApp({
 
         case 'done':
           this.running = false;
+          this.stopping = false;
           this.status = this.status === 'error' ? 'error' : 'done';
           this.statusText = this.status === 'error' ? '失败' : '已结束';
           this.liveLabel = this.runMode === 'review'

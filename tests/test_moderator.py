@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,6 +103,61 @@ class DecideVoteTest(unittest.TestCase):
 
 
 class TiebreakVoteTest(unittest.TestCase):
+    def test_stop_interrupts_waiting_model_call(self) -> None:
+        class SlowAgent:
+            name = "slow"
+            label = "slow"
+
+            def ask(self, prompt, timeout=0, retries=0, on_output=None):
+                time.sleep(0.8)
+                return CallResult(text="late")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            arena = Arena(
+                [SlowAgent(), MockAgent("b")],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+            )
+            cancel = threading.Event()
+            cancel.set()
+            arena.cancel_hook = cancel
+
+            started = time.monotonic()
+            result = arena._ask_with_progress(arena.agents[0], "prompt", "发言")
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(result.error, "用户中止")
+        self.assertLess(elapsed, 0.6)
+
+    def test_failed_judge_ballot_is_retried_before_tiebreak(self) -> None:
+        class BallotAgent:
+            def __init__(self, name: str, ballots: list[str]):
+                self.name = name
+                self.label = name
+                self.ballots = ballots
+                self.calls = 0
+
+            def ask(self, prompt, timeout=0, retries=0, on_output=None):
+                self.calls += 1
+                text = self.ballots[min(self.calls - 1, len(self.ballots) - 1)]
+                return CallResult(text=text)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            a = BallotAgent("a", ['{"vote":"b","reason":"a"}'])
+            b = BallotAgent("b", ['{"vote":"a","reason":"b"}'])
+            judge = BallotAgent("j", ["无法解析", '{"vote":"a","reason":"j"}'])
+            arena = Arena(
+                [a, b, judge],
+                ArenaConfig(proposition="test", out_dir=Path(tmp)),
+            )
+            arena._judges = [judge]
+            record = RoundRecord(no=3, order=["a", "b"])
+
+            out, _, tiebreak = arena._resolve_vote([judge, a, b], [a, b], record, [], 3)
+
+        self.assertEqual(out.name, "a")
+        self.assertEqual(judge.calls, 2)
+        self.assertIsNone(tiebreak)
+
     def test_exhausted_tiebreak_is_marked_undecided(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             sink = RecordingSink()

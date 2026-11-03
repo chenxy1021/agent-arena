@@ -7,7 +7,7 @@ import math
 import random
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -641,30 +641,44 @@ class ReviewArena:
             return agent.name, result
 
         workers = max(1, min(self.cfg.parallel_workers, len(self.agents)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(task, index, agent): agent
-                for index, agent in enumerate(self.agents)
-            }
-            for future in as_completed(futures):
-                agent = futures[future]
-                try:
-                    name, result = future.result()
-                except Exception as exc:
-                    name, result = agent.name, CallResult(error=str(exc))
-                row = by_name[name]
-                row["elapsed"] = round(result.elapsed, 1)
-                if result.error or not result.text.strip():
-                    row["error"] = result.error or "返回内容为空"
-                else:
-                    plan, missing = parse_plan(result.text)
-                    row.update(
-                        text=result.text.strip(),
-                        plan=plan,
-                        struct_complete=not missing,
-                        missing=missing,
-                    )
-                self.sink.emit("review_answer_done", **row)
+        pool = ThreadPoolExecutor(max_workers=workers)
+        futures = {
+            pool.submit(task, index, agent): agent
+            for index, agent in enumerate(self.agents)
+        }
+        pending = set(futures)
+        try:
+            while pending:
+                done, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                for future in done:
+                    agent = futures[future]
+                    try:
+                        name, result = future.result()
+                    except Exception as exc:
+                        name, result = agent.name, CallResult(error=str(exc))
+                    row = by_name[name]
+                    row["elapsed"] = round(result.elapsed, 1)
+                    if result.error or not result.text.strip():
+                        row["error"] = result.error or "返回内容为空"
+                    else:
+                        plan, missing = parse_plan(result.text)
+                        row.update(
+                            text=result.text.strip(),
+                            plan=plan,
+                            struct_complete=not missing,
+                            missing=missing,
+                        )
+                    self.sink.emit("review_answer_done", **row)
+                if self._is_cancelled():
+                    for future in pending:
+                        future.cancel()
+                    for name, row in by_name.items():
+                        if not row["text"] and not row["error"]:
+                            row["error"] = "用户中止"
+                            self.sink.emit("review_answer_done", **row)
+                    break
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         return rows
 
     def _make_labels(self, answers: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
