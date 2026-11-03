@@ -272,6 +272,21 @@ class SpeechPromptVisibilityTest(unittest.TestCase):
 
         self.assertEqual(prior, [("模型A", "A 的论点"), ("模型C", "C 的论点")])
 
+    def test_custom_win_condition_is_included_in_speech_prompt(self) -> None:
+        prompt = prompts.build_speech_prompt(
+            speaker="模型A",
+            proposition="测试命题",
+            active=["模型A", "模型B"],
+            eliminated=[],
+            round_no=1,
+            prior_speeches=[],
+            my_last_stance=None,
+            win_condition="甲、乙同阵营，淘汰丙即该阵营获胜",
+        )
+
+        self.assertIn("【胜出标准】", prompt)
+        self.assertIn("甲、乙同阵营，淘汰丙即该阵营获胜", prompt)
+
 
 class VoteProgressEventTest(unittest.TestCase):
     def test_each_voter_emits_thinking_and_done_events(self) -> None:

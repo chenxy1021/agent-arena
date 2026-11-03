@@ -61,6 +61,7 @@ class RunPresetTest(unittest.TestCase):
         self.assertEqual(preset["constraints"], ["constraint"])
         self.assertEqual(preset["criteria"], ["criterion"])
         self.assertEqual(preset["mode"], "debate")
+        self.assertEqual(preset["win_condition"], "投票至最后一人")
 
     def test_review_preset_restores_judge_and_perspective_switch(self) -> None:
         transcript = {
@@ -234,6 +235,7 @@ class ArchiveInsightsTest(unittest.TestCase):
                 payload = StartRun.model_validate({
                     "proposition": "测试",
                     "mode": "review",
+                    "win_condition": "投票至最后一人",
                     "model_ids": [a["id"], b["id"]],
                     "judge_model_id": judge["id"],
                 })

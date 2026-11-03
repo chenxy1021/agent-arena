@@ -11,16 +11,16 @@
   <img src="docs/screenshots/arena.png" alt="Agent Arena review chamber" width="92%">
 </div>
 
-**Put multiple LLMs at the same table: compare executable plans with an independent judge, or make the models debate and eliminate one another.**
+**Put multiple LLMs at the same table: compare executable plans with an independent judge, or run a custom elimination match with your own win condition.**
 
 Agent Arena is a local-first multi-model decision arena with two modes:
 
 - **Plan review** is the default. Models answer independently, an independent
   judge scores anonymized and shuffled plans, and the result includes a ranking,
   a recommendation, rejection reasons, and an integrated action plan.
-- **Elimination debate** makes models challenge one another across rounds,
-  vote in parallel, eliminate the weakest case, and preserve the full argument
-  trail.
+- **Custom mode** makes models challenge one another across elimination rounds.
+  You define the win condition; it is sent to every speech, vote and final
+  synthesis prompt while the match still advances by elimination.
 
 The output is an auditable transcript, not an opaque "ask several models and
 merge" prompt. The interface only displays provider-visible output. It does not
@@ -33,8 +33,8 @@ invent hidden chain-of-thought; when a compatible provider returns
 | --- | --- |
 | Models | Register any OpenAI Chat Completions-compatible endpoint |
 | Plan review | Parallel independent answers, anonymous shuffled judging, four-dimension scores, recommendation and synthesis |
-| Debate | Independent opening, cross-round critique, parallel voting, elimination, tiebreaks and final summary |
-| Decisions | Default to the most executable plan, or keep the strongest case in debate |
+| Custom mode | Required win condition, cross-round debate, parallel voting, elimination, tiebreaks and final summary |
+| Decisions | Default to the most executable plan, or decide a custom match by its stated win condition |
 | Evidence | Score matrix, rejection reasons, claim ledger, stance spread and complete round transcript |
 | Reliability | Timeouts, retries, stop control, SSE progress heartbeats and explicit failure diagnostics |
 | Records | Mode-aware history, searchable archive, reusable presets and no cross-mode mixed ranking |
@@ -42,11 +42,12 @@ invent hidden chain-of-thought; when a compatible provider returns
 
 ## Two Modes
 
-| | Plan Review | Elimination Debate |
+| | Plan Review | Custom Mode |
 | --- | --- | --- |
-| Best for | Fast comparison of executable plans | Stress-testing a contested position |
+| Best for | Fast comparison of executable plans | Stress-testing a contested position with a specific win rule |
 | Participants | 2-8 models | 2-8 models |
 | Judge | One independent model outside the lineup | Participants vote on one another |
+| Win condition | Not applicable | Required; defaults to `Vote until one remains` |
 | Typical cost | `N + 2` calls | Multi-round, usually slower |
 | Output | Comparison matrix, recommendation, rejection reasons, synthesis | Winner or undecided result with the full debate trail |
 | Default | Yes | Optional deep-dive mode |
@@ -66,7 +67,7 @@ conditions.
 
 The live review chamber shows each plan as it arrives, the judging phases, the
 four-dimension comparison, recommendation, rejection reasons and integration
-steps. The debate room keeps generation, voting, tiebreak and archive progress
+steps. The custom match room keeps generation, voting, tiebreak and archive progress
 visible. The daylight theme and language selection persist locally.
 
 ## Quick Start
@@ -77,7 +78,7 @@ Requirements:
 - [uv](https://docs.astral.sh/uv/)
 - For review mode, at least three model configurations: two participants and one
   independent judge
-- For debate mode, at least two model configurations
+- For custom mode, at least two model configurations
 
 ```bash
 git clone https://github.com/chenxy1021/agent-arena.git
@@ -102,10 +103,12 @@ uv run uvicorn config.asgi:app --reload
 First run:
 
 1. Open **Models** and register the endpoints you want to use.
-2. Open **Setup** and choose **Plan Review** or **Elimination Debate**.
+2. Open **Setup** and choose **Plan Review** or **Custom Mode**.
 3. Select 2-8 participants. For plan review, also select a judge that is not in
    the participant list.
-4. Enter the proposition, background, constraints and evaluation notes.
+4. For custom mode, enter a required win condition (for example, `Vote until one
+   remains`, or a camp-based rule). Enter the proposition, background,
+   constraints and evaluation notes.
 5. Start the run.
 
 **Preview match** uses local frontend mock data. It does not call a provider,
@@ -138,7 +141,7 @@ flowchart LR
     UI[Vue 3 interface] -->|REST + SSE| API[FastAPI routes]
     API --> MANAGER[Run manager]
     MANAGER --> REVIEW[Plan review engine]
-    MANAGER --> DEBATE[Debate engine]
+    MANAGER --> DEBATE[Custom match engine]
     REVIEW --> PROVIDERS[OpenAI-compatible adapters]
     DEBATE --> PROVIDERS
     MANAGER --> DB[(SQLite)]
@@ -153,8 +156,8 @@ fan-in, not an autonomous multi-agent swarm:
    judge independence.
 2. Plan review fans out independent answers, anonymizes and shuffles valid
    plans, then asks the judge for structured scoring and synthesis.
-3. Debate builds every prompt and applies the tournament state machine, voting
-   weights and tiebreak rules.
+3. Custom mode injects the user's win condition into every prompt and applies
+   the elimination state machine, voting weights and tiebreak rules.
 4. Results are emitted over SSE and archived locally.
 
 This keeps costs, ordering, cancellation and transcript generation predictable.
@@ -212,7 +215,7 @@ tests/                    mock and loopback tests
 | `PUT` | `/api/models/{id}` | Update a model |
 | `DELETE` | `/api/models/{id}` | Delete a model |
 | `POST` | `/api/models/suggest-name` | Ask a model for a display name |
-| `POST` | `/api/runs` | Create and start a review or debate run |
+| `POST` | `/api/runs` | Create and start a review or custom elimination run; `win_condition` is required |
 | `POST` | `/api/runs/{id}/stop` | Request cancellation |
 | `GET` | `/api/runs/active` | Read the active run |
 | `GET` | `/api/runs/{id}/events` | Subscribe to the SSE stream |
@@ -221,7 +224,7 @@ tests/                    mock and loopback tests
 | `GET` | `/api/history/{id}/preset` | Build a reusable run preset |
 
 Review SSE events include independent answer progress, anonymized labels,
-judge retries, score results, recommendation and synthesis. Debate SSE events
+judge retries, score results, recommendation and synthesis. Custom mode SSE events
 include speech streams, waiting heartbeats, parallel progress, vote progress,
 scores, tiebreaks, eliminations, claims, convergence and archive completion.
 
@@ -268,4 +271,4 @@ No real provider API key is required.
 - User accounts and per-user model ownership.
 - Shared deployment controls and quotas.
 - Multi-judge review panels and human adoption decisions.
-- Optional research/tool workflows outside the core review and debate engines.
+- Optional research/tool workflows outside the core review and custom match engines.

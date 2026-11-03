@@ -110,10 +110,10 @@
       <header class="page-head register-head">
         <div class="register-head__copy">
           <span class="register-head__eyebrow">Session setup</span>
-          <h1>{{ runMode === 'review' ? '布置一场方案评审' : '布置今天的辩论' }}</h1>
+          <h1>{{ runMode === 'review' ? '布置一场方案评审' : '布置一场自定义赛' }}</h1>
           <p>{{ runMode === 'review'
             ? '多个模型独立给方案，独立裁判匿名评分，最后给出推荐与整合建议。'
-            : '定下命题，挑选阵容，调整赛制。剩下的交给议事舱。' }}</p>
+            : '定下命题与胜出标准，挑选阵容。赛制仍按淘汰推进。' }}</p>
         </div>
         <div class="register-head__counter" aria-label="参赛席位">
           <span>参赛席位</span>
@@ -134,11 +134,11 @@
               <small>约 N+2 次调用 · 1–3 分钟</small>
             </button>
             <button type="button" class="mode-card" :class="{ active: runMode === 'debate' }"
-              :aria-pressed="runMode === 'debate'" @click="runMode = 'debate'">
+              :aria-pressed="runMode === 'debate'" @click="runMode = 'debate'; mode = 'eliminate'">
               <span class="mode-card__index">02</span>
-              <b>淘汰辩论</b>
-              <em>深挖</em>
-              <p>逐轮交锋 · 互评淘汰 · 最终总结</p>
+              <b>自定义模式</b>
+              <em>淘汰制</em>
+              <p>逐轮交锋 · 自定义胜出标准 · 最终总结</p>
               <small>{{ debateCost }}</small>
             </button>
           </section>
@@ -264,17 +264,19 @@
             </div>
 
             <div v-if="runMode === 'debate'" class="rule__section">
-              <span class="rule__label">胜负规则</span>
-              <div class="segmented" role="group" aria-label="比赛规则">
-                <span class="segmented__indicator" :style="ruleIndicatorStyle" aria-hidden="true"></span>
-                <button type="button" :class="{ active: mode === 'eliminate' }"
-                  @click="mode = 'eliminate'">淘汰制</button>
-                <button type="button" :class="{ active: mode === 'support' }"
-                  @click="mode = 'support'">评选制</button>
+              <label class="rule__label" for="win-condition">
+                胜出标准 <em class="rule__required">必填</em>
+              </label>
+              <textarea id="win-condition" class="win-condition-input" v-model="winCondition"
+                rows="3" maxlength="1000"
+                placeholder="例如：甲、乙为同一阵营，淘汰丙后该阵营获胜；或投票至最后一人"></textarea>
+              <div class="win-condition-actions">
+                <p class="rule__note rule__note--sm">
+                  系统按淘汰制推进；该标准会写入每轮发言、投票和最终总结。
+                </p>
+                <button type="button" class="text-action"
+                  @click="winCondition = '投票至最后一人'">恢复默认</button>
               </div>
-              <p class="rule__note" :class="{ faded: mode === 'support' }">
-                {{ mode === 'support' ? '投给观点最正确的一方，票少者出局' : '投给观点最站不住的一方，票多者出局' }}
-              </p>
             </div>
 
             <div v-if="runMode === 'review'" class="rule__section">
@@ -381,7 +383,7 @@
               方案评审 · 限时 {{ timeout }}s · {{ participants.length }} 份方案
             </template>
             <template v-else>
-              {{ mode === 'support' ? '评选制' : '淘汰制' }} · 限时 {{ timeout }}s ·
+              自定义模式 · 淘汰制 · 限时 {{ timeout }}s ·
               {{ aliveCount }} 人存活 · 第 {{ currentRound || 0 }} 轮
             </template>
           </span>
@@ -1021,8 +1023,8 @@
           <span>{{ runMode === 'review' ? 'Review dossier' : 'Decision dossier' }}</span>
           <strong>{{ runMode === 'review' ? (reviewJudgeResult ? '方案评审' : '评审未完成') : (matchOutcome?.label || '已归档') }}</strong>
           <p>{{ runMode === 'review'
-            ? '匿名评分只在本模式内可比，不与淘汰辩论混排。'
-            : (matchOutcome?.detail || '完整保留发言、投票与最终裁决。') }}</p>
+            ? '匿名评分只在本模式内可比，不与自定义模式混排。'
+            : (winCondition || matchOutcome?.detail || '完整保留发言、投票与最终裁决。') }}</p>
         </div>
         <div class="record-stat">
           <span>{{ runMode === 'review' ? '方案' : '轮次' }}</span>
@@ -1050,7 +1052,7 @@
             <span>ANONYMOUS REVIEW</span>
             <h2>{{ reviewJudgeResult ? '评委推荐与方案对比' : '评审未完成' }}</h2>
           </div>
-          <div class="record-mode-badge">方案评审 · 不可与辩论混排</div>
+          <div class="record-mode-badge">方案评审 · 独立评分口径</div>
         </header>
 
         <div v-if="reviewTieText" class="review-warnings">
@@ -1093,17 +1095,19 @@
 
         <details v-if="reviewRows.length" class="review-record__plans">
           <summary>查看全部方案全文</summary>
-          <article v-for="row in reviewRows" :key="'record-plan-' + row.agent">
+          <article v-for="row in reviewRows" :key="'record-plan-' + row.agent"
+            :style="{ '--team-color': agentColor(row.agent) }">
             <h3>{{ row.agent }} · {{ row.perspective || '未分配视角' }}</h3>
             <p v-if="row.error" class="record-error">{{ row.error }}</p>
             <p v-else-if="row.cancelled" class="record-error">
               已中止（部分产出）
               <template v-if="row.text"><br>{{ row.text }}</template>
             </p>
-            <div v-else class="speech-block__body">
+            <div v-else class="review-plan-detail">
               <div v-for="field in reviewPlanFields(row)" :key="row.agent + 'rf-' + field.key"
-                class="speech-block__para">
-                <mark>{{ field.label }}</mark>{{ field.value || '—' }}
+                class="review-plan-detail__field">
+                <span>{{ field.label }}</span>
+                <p>{{ field.value || '—' }}</p>
               </div>
             </div>
           </article>
@@ -1344,7 +1348,7 @@
           <button type="button" :class="{ active: archiveScope === 'review' }"
             @click="archiveScope = 'review'; loadArchiveInsights()">方案评审</button>
           <button type="button" :class="{ active: archiveScope === 'debate' }"
-            @click="archiveScope = 'debate'; loadArchiveInsights()">淘汰辩论</button>
+            @click="archiveScope = 'debate'; loadArchiveInsights()">自定义模式</button>
         </div>
       </section>
 
@@ -1434,7 +1438,7 @@
         </div>
 
         <section v-if="modelProfiles.length && archiveScope !== 'all'" class="model-profile">
-          <h3>模型画像（{{ archiveScope === 'review' ? '方案评审' : '淘汰辩论' }}）</h3>
+          <h3>模型画像（{{ archiveScope === 'review' ? '方案评审' : '自定义模式' }}）</h3>
           <table>
             <thead>
               <tr>

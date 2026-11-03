@@ -58,6 +58,7 @@ def build_speech_prompt(
     prior_speeches: Sequence[tuple[str, str]],
     my_last_stance: str | None,
     vote_mode: str = "eliminate",
+    win_condition: str = "投票至最后一人",
     criteria: Sequence[str] | None = None,
     background: str = "",
     constraints: Sequence[str] | None = None,
@@ -136,8 +137,12 @@ def build_speech_prompt(
 
     context = _context_block(background, constraints)
 
-    return f"""你在参加一场「多智能体辩论淘汰赛」。参赛者都是独立的 AI 智能体，最终只有一人存活。
+    return f"""你在参加一场「多智能体自定义淘汰赛」。参赛者都是独立的 AI 智能体，胜负按用户设定的胜出标准判断。
 {rule_line}
+
+【胜出标准】
+{win_condition.strip()}
+你的发言和投票必须服务这个胜出标准，不得自行更改标准。
 
 【命题】
 {proposition}
@@ -184,6 +189,7 @@ def build_vote_prompt(
     eliminated: Sequence[tuple[str, str]],
     judge_note: str | None = None,
     vote_mode: str = "eliminate",
+    win_condition: str = "投票至最后一人",
     criteria: Sequence[str] | None = None,
     background: str = "",
     constraints: Sequence[str] | None = None,
@@ -210,6 +216,10 @@ def build_vote_prompt(
 
 【命题】
 {proposition}
+
+【胜出标准】
+{win_condition.strip()}
+投票时必须优先考虑：怎样投票才能让这个胜出标准成立。
 
 {context}
 
@@ -239,6 +249,7 @@ def build_tiebreak_speech_prompt(
     round_no: int,
     round_speeches: Sequence[tuple[str, str]],
     tiebreak_speeches: Sequence[tuple[str, str]],
+    win_condition: str = "投票至最后一人",
     criteria: Sequence[str] | None = None,
     background: str = "",
     constraints: Sequence[str] | None = None,
@@ -265,6 +276,9 @@ def build_tiebreak_speech_prompt(
 【你的任务】
 只围绕平票争议继续辩论：补充新论据、回应质疑，或修正此前论证。不要重复已有观点，不要投票，不要点评赛制。
 
+【胜出标准】
+{win_condition.strip()}
+
 【输出格式】严格按下面标签输出，不要任何开场白、解释或结尾总结：
 【立场】<一个 -100 到 +100 的整数>
 【观点】<150-250 字：新增论据 + 对平票对手的回应 + 可执行建议>
@@ -278,6 +292,7 @@ def build_final_prompt(
     transcript_digest: str,
     eliminated: Sequence[tuple[str, str]],
     eliminated_claims: Sequence[str] = (),
+    win_condition: str = "投票至最后一人",
     criteria: Sequence[str] | None = None,
     background: str = "",
     constraints: Sequence[str] | None = None,
@@ -295,6 +310,9 @@ def build_final_prompt(
 
 【命题】
 {proposition}
+
+【胜出标准】
+{win_condition.strip()}
 
 {context}
 

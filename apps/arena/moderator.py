@@ -92,6 +92,7 @@ class RoundRecord:
 @dataclass
 class ArenaConfig:
     proposition: str
+    win_condition: str = "投票至最后一人"
     max_rounds: int = 0          # 0 = 自动（人数，首轮不投票）
     timeout: float = 240.0       # 单次调用超时（秒）
     out_dir: Path = Path("runs")
@@ -110,6 +111,7 @@ class ArenaConfig:
 @dataclass
 class ArenaResult:
     proposition: str
+    win_condition: str
     started_at: str
     duration: float
     vote_mode: str
@@ -460,6 +462,7 @@ class Arena:
             proposition=cfg.proposition,
             agents=[self._agent_dict(a) for a in active],
             vote_mode=cfg.vote_mode,
+            win_condition=cfg.win_condition,
             max_rounds=max_rounds,
             speech_mode=cfg.speech_mode,
         )
@@ -636,6 +639,7 @@ class Arena:
 
         result = ArenaResult(
             proposition=cfg.proposition,
+            win_condition=cfg.win_condition,
             started_at=started,
             duration=round(time.monotonic() - t0, 1),
             vote_mode=cfg.vote_mode,
@@ -652,6 +656,7 @@ class Arena:
                     for agent in self.agents
                 ],
                 "vote_mode": cfg.vote_mode,
+                "win_condition": cfg.win_condition,
                 "speech_mode": cfg.speech_mode,
                 "timeout": cfg.timeout,
                 "background": cfg.background,
@@ -707,6 +712,7 @@ class Arena:
             prior_speeches=prior_speeches,
             my_last_stance=self._last_stance.get(agent.name),
             vote_mode=self.cfg.vote_mode,
+            win_condition=self.cfg.win_condition,
             criteria=self.cfg.criteria,
             background=self.cfg.background,
             constraints=self.cfg.constraints,
@@ -981,6 +987,7 @@ class Arena:
                 eliminated=elim_pairs,
                 judge_note=judge_note,
                 vote_mode=self.cfg.vote_mode,
+                win_condition=self.cfg.win_condition,
                 criteria=self.cfg.criteria,
                 background=self.cfg.background,
                 constraints=self.cfg.constraints,
@@ -1233,6 +1240,7 @@ class Arena:
                         round_no=rnd,
                         round_speeches=round_speeches,
                         tiebreak_speeches=tiebreak_speeches,
+                        win_condition=self.cfg.win_condition,
                         criteria=self.cfg.criteria,
                         background=self.cfg.background,
                         constraints=self.cfg.constraints,
@@ -1401,6 +1409,7 @@ class Arena:
             transcript_digest=_digest(rounds),
             eliminated=[(e["agent"], e["reason"]) for e in eliminated],
             eliminated_claims=eliminated_claims,
+            win_condition=self.cfg.win_condition,
             criteria=self.cfg.criteria,
             background=self.cfg.background,
             constraints=self.cfg.constraints,

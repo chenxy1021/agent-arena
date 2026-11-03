@@ -550,6 +550,7 @@ Vue.createApp({
         ['models', '模型'],
       ],
       proposition: '',
+      winCondition: '投票至最后一人',
       currentPage: 'register',
       runMode: 'review',
       mode: 'eliminate',
@@ -700,6 +701,7 @@ Vue.createApp({
 
     canStart() {
       if (this.selectedModelIds.length < 2) return false;
+      if (this.runMode !== 'review' && !this.winCondition.trim()) return false;
       return this.runMode !== 'review' || Boolean(this.reviewJudgeId);
     },
 
@@ -2021,7 +2023,7 @@ Vue.createApp({
     },
 
     modeLabel(mode) {
-      return mode === 'review' ? '方案评审' : '淘汰辩论';
+      return mode === 'review' ? '方案评审' : '自定义模式';
     },
 
     reviewAnswerFor(agent) {
@@ -2768,6 +2770,11 @@ Vue.createApp({
         this.hintError = true;
         return;
       }
+      if (runMode !== 'review' && !this.winCondition.trim()) {
+        this.hint = '自定义模式必须填写胜出标准';
+        this.hintError = true;
+        return;
+      }
       this.hint = '';
       this.hintError = false;
       this.resetArena();
@@ -2782,7 +2789,8 @@ Vue.createApp({
       const payload = {
         proposition,
         mode: runMode,
-        vote_mode: this.mode,
+        vote_mode: runMode === 'debate' ? 'eliminate' : this.mode,
+        win_condition: this.winCondition.trim() || '投票至最后一人',
         judge_model_id: runMode === 'review' ? Number(this.reviewJudgeId) : null,
         diversify: Boolean(this.diversify),
         timeout: Number(this.timeout) || 240,
@@ -3165,6 +3173,7 @@ Vue.createApp({
       const names = DEMO_MODELS.map((model) => model.name);
       return {
         proposition: '远程办公是否应该永久化',
+        win_condition: '投票至最后一人',
         vote_mode: 'eliminate',
         duration: 252,
         winner: 'GPT-5',
@@ -3248,6 +3257,7 @@ Vue.createApp({
       this.viewingHistoryId = 'demo';
       const transcript = this.demoTranscript();
       this.proposition = transcript.proposition;
+      this.winCondition = transcript.win_condition || '投票至最后一人';
       this.mode = transcript.vote_mode;
       this.status = 'done';
       this.participants = transcript.participants.map((p) => ({
@@ -3363,6 +3373,7 @@ Vue.createApp({
           // 未开赛/未回放时收到旧事件，说明是残留流，不能改写当前页面状态。
           if (!this.running && !this.replaying) break;
           this.runMode = ev.mode === 'review' ? 'review' : 'debate';
+          this.winCondition = ev.win_condition || this.winCondition || '投票至最后一人';
           this.modelOutputs = {};
           this.parallelRows = [];
           this.parallelRound = 0;
@@ -4063,7 +4074,8 @@ Vue.createApp({
         this.resetArena();
         this.proposition = preset.proposition || '';
         this.runMode = preset.mode === 'debate' ? 'debate' : 'review';
-        this.mode = preset.vote_mode || 'eliminate';
+        this.mode = 'eliminate';
+        this.winCondition = preset.win_condition || '投票至最后一人';
         this.reviewJudgeId = preset.judge_model_id || '';
         this.diversify = preset.diversify !== false;
         this.speechMode = 'parallel_buffered';
@@ -4117,7 +4129,10 @@ Vue.createApp({
         this.canReuseCurrentRun = (transcript.setup?.model_ids || []).length >= 2;
         this.proposition = transcript.proposition || this.proposition;
         this.runMode = transcript.mode === 'review' ? 'review' : 'debate';
-        this.mode = transcript.vote_mode || 'eliminate';
+        this.mode = transcript.mode === 'review' ? (transcript.vote_mode || 'eliminate') : 'eliminate';
+        this.winCondition = transcript.win_condition
+          || transcript.setup?.win_condition
+          || '投票至最后一人';
         this.participants = (transcript.participants || []).map((p) => ({
           name: p.name,
           label: p.label,

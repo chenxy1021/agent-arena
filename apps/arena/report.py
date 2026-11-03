@@ -29,8 +29,9 @@ def _md(result: ArenaResult) -> str:
 
     add(f"# 多智能体辩论战报\n")
     add(f"- **命题**：{result.proposition}")
-    add("- **模式**：淘汰辩论")
+    add("- **模式**：自定义模式")
     add(f"- **规则**：{MODE_LABEL.get(result.vote_mode, result.vote_mode)}")
+    add(f"- **胜出标准**：{result.win_condition}")
     add(f"- **开始时间**：{result.started_at}")
     add(f"- **耗时**：{result.duration}s")
     add(f"- **参赛者**：{', '.join(p['name'] for p in result.participants)}")

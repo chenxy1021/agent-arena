@@ -87,6 +87,9 @@ class Manager:
         proposition = payload.proposition.strip()
         if not proposition:
             raise ValueError("命题不能为空")
+        win_condition = payload.win_condition.strip()
+        if payload.mode == "debate" and not win_condition:
+            raise ValueError("自定义模式必须填写胜出标准")
 
         agents: list[ApiModelAgent] = []
         configs: dict[int, dict[str, Any]] = {}
@@ -158,6 +161,7 @@ class Manager:
 
         cfg = ArenaConfig(
             proposition=proposition,
+            win_condition=win_condition,
             max_rounds=0,
             timeout=payload.timeout,
             out_dir=settings.RUNS_DIR,

@@ -209,6 +209,11 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
         ]
         run["round_count"] = len(transcript.get("rounds") or [])
         run["stop_reason"] = str(transcript.get("stop_reason") or "")
+        run["win_condition"] = str(
+            transcript.get("win_condition")
+            or (transcript.get("setup") or {}).get("win_condition")
+            or ""
+        )
         run["converged"] = bool(transcript.get("converged"))
         run["recommended_agent"] = str(transcript.get("recommended_agent") or "")
         run["judge_name"] = str((transcript.get("judge") or {}).get("name") or "")
@@ -282,6 +287,11 @@ def build_run_preset(
         "proposition": str(transcript.get("proposition") or ""),
         "mode": mode,
         "vote_mode": str(setup.get("vote_mode") or "eliminate"),
+        "win_condition": str(
+            transcript.get("win_condition")
+            or setup.get("win_condition")
+            or "投票至最后一人"
+        ).strip(),
         "speech_mode": str(setup.get("speech_mode") or "parallel_buffered"),
         "timeout": float(setup.get("timeout") or 240),
         "background": str(setup.get("background") or ""),
