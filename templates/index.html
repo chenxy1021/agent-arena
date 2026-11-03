@@ -494,7 +494,7 @@
                   <robot-avatar :name="row.agent" :spec="robotSpec(row.agent)"
                     :color="agentColor(row.agent)"
                     :state="row.state === 'working' ? 'thinking' : row.state === 'error' ? 'out' : 'idle'"
-                    :size="34"></robot-avatar>
+                    :size="40"></robot-avatar>
                   <span>
                     <b>{{ row.agent }}</b>
                     <small>{{ row.model }} · {{ row.perspective || '未分配视角' }}</small>
@@ -502,11 +502,31 @@
                   <em>{{ row.statusLabel }}</em>
                 </header>
                 <div v-if="row.error" class="review-answer__error">{{ row.error }}</div>
+                <div v-else-if="row.text && row.state !== 'done'" class="review-answer__stream">
+                  <header>
+                    <span>{{ row.state === 'working' ? '思考过程' : '部分输出' }}</span>
+                    <em>{{ row.state === 'working' ? '实时输出' : row.statusLabel }}</em>
+                  </header>
+                  <p>{{ reviewLiveText(row) }}</p>
+                </div>
                 <div v-else-if="row.text" class="review-answer__body">
-                  <div v-for="field in reviewPlanFields(row)" :key="row.agent + field.key"
-                    class="review-plan-field">
-                    <span>{{ field.label }}</span>
-                    <p>{{ field.value || '—' }}</p>
+                  <template v-if="reviewHasPlan(row)">
+                    <div class="review-answer__conclusion">
+                      <span>最终结论</span>
+                      <b>{{ row.plan.claim || row.plan.name || '方案已完成' }}</b>
+                    </div>
+                    <div v-for="field in reviewPlanFields(row, true)" :key="row.agent + field.key"
+                      class="review-plan-field">
+                      <span>{{ field.label }}</span>
+                      <p>{{ field.value || '—' }}</p>
+                    </div>
+                  </template>
+                  <div v-else class="review-answer__stream is-final">
+                    <header>
+                      <span>最终输出</span>
+                      <em>未按模板解析</em>
+                    </header>
+                    <p>{{ row.text }}</p>
                   </div>
                 </div>
                 <div v-else class="review-answer__waiting">
@@ -785,7 +805,7 @@
               :style="{ '--team-color': agentColor(row.name) }">
               <header class="parallel-paper__head">
                 <robot-avatar :name="row.name" :spec="row.spec" :color="agentColor(row.name)"
-                  :state="row.text ? 'idle' : row.done ? 'idle' : 'thinking'" :size="30"></robot-avatar>
+                  :state="row.error ? 'out' : row.done ? 'idle' : 'thinking'" :size="36"></robot-avatar>
                 <span>
                   <b>{{ displayName(row.name) }}</b>
                   <small>{{ row.model }}</small>

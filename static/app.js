@@ -2028,12 +2028,18 @@ Vue.createApp({
       return this.reviewRows.find((row) => row.agent === agent) || null;
     },
 
-    reviewPlanFields(row) {
-      return REVIEW_FIELDS.map(([key, label]) => ({
-        key,
-        label,
-        value: row.plan?.[key] || '',
-      }));
+    reviewPlanFields(row, omitClaim = false) {
+      return REVIEW_FIELDS
+        .filter(([key]) => !(omitClaim && key === 'claim'))
+        .map(([key, label]) => ({
+          key,
+          label,
+          value: row.plan?.[key] || '',
+        }));
+    },
+
+    reviewHasPlan(row) {
+      return REVIEW_FIELDS.some(([key]) => String(row.plan?.[key] || '').trim());
     },
 
     upsertReviewRow(name, patch = {}) {
@@ -2060,18 +2066,25 @@ Vue.createApp({
       if (next.error) {
         next.state = 'error';
         next.statusLabel = '缺席';
-      } else if (next.text) {
+      } else if (next.state === 'cancelled') {
+        next.statusLabel = '已中止';
+      } else if (next.state === 'done') {
         next.state = 'done';
         next.statusLabel = '已提交';
         next.waitingLabel = '方案已提交';
         next.progress = 100;
-      } else if (next.state !== 'idle') {
+      } else if (next.state === 'working') {
         next.state = 'working';
-        next.statusLabel = '作答中';
+        next.statusLabel = next.text ? '输出中' : '作答中';
       }
       if (index >= 0) this.reviewRows.splice(index, 1, next);
       else this.reviewRows.push(next);
       this.reviewRows = [...this.reviewRows];
+    },
+
+    reviewLiveText(row) {
+      const text = String(row?.text || '');
+      return text.length > 1400 ? `…${text.slice(-1400)}` : text;
     },
 
     agentModel(name) {
