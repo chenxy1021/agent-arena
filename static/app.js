@@ -565,6 +565,8 @@ Vue.createApp({
       reviewSynthesisSections: null,
       reviewAbsent: [],
       reviewAnomalies: [],
+      winCheck: null,
+      winChecks: [],
       timeout: 240,
       speechMode: 'parallel_buffered',
       background: '',
@@ -626,6 +628,7 @@ Vue.createApp({
       currentRound: 0,
       final: null,
       winnerName: '',
+      winnerAgents: [],
       status: 'idle',
       statusText: '待命',
       stopReason: '',
@@ -702,7 +705,12 @@ Vue.createApp({
     canStart() {
       if (this.selectedModelIds.length < 2) return false;
       if (this.runMode !== 'review' && !this.winCondition.trim()) return false;
-      return this.runMode !== 'review' || Boolean(this.reviewJudgeId);
+      return Boolean(this.reviewJudgeId);
+    },
+
+    winnerLabel() {
+      const names = this.winnerAgents.length ? this.winnerAgents : (this.winnerName ? [this.winnerName] : []);
+      return names.join('、');
     },
 
     costEstimate() {
@@ -724,7 +732,7 @@ Vue.createApp({
         minutes = [1, 3];
       } else {
         const table = { 2: 6, 3: 11, 4: 34, 5: 52, 6: 74, 7: 90, 8: 108 };
-        calls = table[count] || count * count * 2 + count;
+        calls = (table[count] || count * count * 2 + count) + Math.max(0, count - 2);
         worst = calls + Math.max(2, count);
         minutes = count <= 3 ? [3, 7] : count <= 4 ? [5, 11] : [8, 16];
       }
@@ -1313,7 +1321,7 @@ Vue.createApp({
         }));
       }
       return this.participants
-        .filter((item) => item.name !== this.winnerName)
+        .filter((item) => !this.winnerAgents.includes(item.name) && item.name !== this.winnerName)
         .map((item) => ({ value: item.name, label: item.name }));
     },
 
@@ -1363,12 +1371,15 @@ Vue.createApp({
         return { kind: 'stopped', label: '中止', title: this.stopReason, detail: '保留已完成的全部轮次与发言。' };
       }
       if (this.winnerName) {
+        const judged = this.winCheck?.met
+          ? `裁判${this.winCheck.judge ? ` ${this.winCheck.judge}` : ''}认定胜出标准已满足：${this.winCheck.reason || '条件成立'}。`
+          : '';
         return {
           kind: 'winner',
           label: '胜出',
-          title: this.winnerName,
-          model: this.agentModel(this.winnerName),
-          detail: this.converged ? '完成投票裁决；比赛过程中曾出现立场趋同。' : '比赛完成全部必要轮次。',
+          title: this.winnerLabel || this.winnerName,
+          model: this.winnerAgents.length > 1 ? '' : this.agentModel(this.winnerName),
+          detail: judged || (this.converged ? '完成投票裁决；比赛过程中曾出现立场趋同。' : '比赛完成全部必要轮次。'),
         };
       }
       if (this.converged) {
@@ -1635,7 +1646,7 @@ Vue.createApp({
 
     robotState(name) {
       const participant = this.participants.find((item) => item.name === name);
-      if (this.winnerName === name) return 'winner';
+      if (this.winnerAgents.includes(name) || this.winnerName === name) return 'winner';
       if (participant?.state === 'out') return 'out';
       if (participant?.state === 'thinking') return 'thinking';
       if (this.running && this.activeAgent === name) return 'speaking';
@@ -2255,7 +2266,7 @@ Vue.createApp({
         if (!hasSelection) {
           const participantLimit = Math.min(3, Math.max(2, rows.length - 1));
           rows.forEach((item, index) => { item.checked = index < participantLimit; });
-          if (this.runMode === 'review' && rows.length >= 3) {
+          if (rows.length >= 3) {
             this.reviewJudgeId = rows[participantLimit]?.id || '';
           }
         } else if (this.reviewJudgeId && selected.get(Number(this.reviewJudgeId))) {
@@ -2671,6 +2682,9 @@ Vue.createApp({
       this.currentRound = 0;
       this.final = null;
       this.winnerName = '';
+      this.winnerAgents = [];
+      this.winCheck = null;
+      this.winChecks = [];
       this.eventCount = 0;
       this.status = 'idle';
       this.statusText = '待命';
@@ -2765,8 +2779,10 @@ Vue.createApp({
         this.hintError = true;
         return;
       }
-      if (runMode === 'review' && !this.reviewJudgeId) {
-        this.hint = '方案评审需要选择一个不参赛的独立裁判';
+      if (!this.reviewJudgeId) {
+        this.hint = runMode === 'review'
+          ? '方案评审需要选择一个不参赛的独立裁判'
+          : '自定义模式需要选择一个不参赛的裁判来核验胜出标准';
         this.hintError = true;
         return;
       }
@@ -2791,7 +2807,7 @@ Vue.createApp({
         mode: runMode,
         vote_mode: runMode === 'debate' ? 'eliminate' : this.mode,
         win_condition: this.winCondition.trim() || '投票至最后一人',
-        judge_model_id: runMode === 'review' ? Number(this.reviewJudgeId) : null,
+        judge_model_id: Number(this.reviewJudgeId),
         diversify: Boolean(this.diversify),
         timeout: Number(this.timeout) || 240,
         model_ids: this.selectedModelIds,
@@ -3045,6 +3061,9 @@ Vue.createApp({
 
       push({
         kind: 'run_start',
+        mode: 'debate',
+        win_condition: this.winCondition.trim() || '投票至最后一人',
+        judge: { name: '裁判灵溪', label: 'workbuddy/glm-5.3-flash' },
         agents: names.map((name, index) => ({
           name,
           label: DEMO_MODELS[index].model,
@@ -3143,6 +3162,17 @@ Vue.createApp({
       at += 700;
       push({ kind: 'elimination', agent: 'DeepSeek', votes: 1, tiebreak: '本轮直接出局' }, at);
       at += 1200;
+      push({ kind: 'win_check_start', round_no: 2, agent: '裁判灵溪' }, at);
+      at += 500;
+      push({
+        kind: 'win_check',
+        round: 2,
+        met: false,
+        winners: [],
+        reason: '当前仍有多方在核心分歧上未分胜负',
+        judge: '裁判灵溪',
+      }, at);
+      at += 500;
       push({ kind: 'winner', agent: 'GPT-5' }, at);
       at += 500;
       push({
@@ -3160,7 +3190,7 @@ Vue.createApp({
       at += 300;
       push({ kind: 'saved', paths: ['runs/20261102-demo/debate.md'] }, at);
       at += 300;
-      push({ kind: 'done', duration: 24, rounds: 2, winner: 'GPT-5' }, at);
+      push({ kind: 'done', duration: 24, rounds: 2, winner: 'GPT-5', agents: ['GPT-5'] }, at);
     },
 
     stopDemo() {
@@ -3265,6 +3295,9 @@ Vue.createApp({
         state: 'alive', lastRole: '', lastElapsed: 0,
       }));
       this.winnerName = transcript.winner;
+      this.winnerAgents = transcript.winner_agents?.length
+        ? transcript.winner_agents
+        : (transcript.winner ? [transcript.winner] : []);
       for (const record of transcript.rounds) {
         const round = this.ensureRound(record.no);
         round.order = record.order || [];
@@ -3374,6 +3407,8 @@ Vue.createApp({
           if (!this.running && !this.replaying) break;
           this.runMode = ev.mode === 'review' ? 'review' : 'debate';
           this.winCondition = ev.win_condition || this.winCondition || '投票至最后一人';
+          this.winCheck = null;
+          this.winChecks = [];
           this.modelOutputs = {};
           this.parallelRows = [];
           this.parallelRound = 0;
@@ -3412,7 +3447,7 @@ Vue.createApp({
             this.beginStage('', '参赛模型并行作答');
             this.introHint = '方案评审 · 独立作答';
           } else {
-            this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛`;
+            this.liveLabel = `第 1 轮即将开始 · ${this.participants.length} 位参赛 · 裁判 ${ev.judge?.name || '待命'}`;
             this.beginStage('', '参赛阵容已就绪');
             this.introHint = `第 1 轮 · ${this.participants.length} 位参赛`;
           }
@@ -3858,11 +3893,40 @@ Vue.createApp({
           break;
         }
 
+        case 'win_check_start':
+          this.liveLabel = `裁判正在核验胜出标准`;
+          this.beginStage(ev.agent || this.reviewJudge?.name || '裁判', '判断当前赛况是否满足胜出标准');
+          break;
+
+        case 'win_check': {
+          const check = {
+            round: Number(ev.round || this.currentRound || 0),
+            met: Boolean(ev.met),
+            winners: ev.winners || [],
+            reason: ev.reason || '',
+            error: ev.error || '',
+            judge: ev.judge || this.reviewJudge?.name || '',
+          };
+          this.winCheck = check;
+          this.winChecks = [...this.winChecks, check];
+          this.liveLabel = check.met
+            ? `胜出标准已满足：${check.winners.join('、') || '裁判判定成立'}`
+            : `胜出标准未满足，比赛继续`;
+          this.beginStage(
+            check.judge || '裁判',
+            check.error || check.reason || (check.met ? '条件成立' : '条件尚未成立'),
+          );
+          this.playFx(check.met ? 'winner' : 'count', check.met ? 1200 : 500);
+          break;
+        }
+
         case 'winner':
           this.winnerName = ev.agent;
+          this.winnerAgents = (ev.agents || []).length ? ev.agents : [ev.agent];
           this.setAgentState(ev.agent, 'alive');
-          this.liveLabel = `${ev.agent} 最终存活`;
-          this.beginStage(ev.agent, `${ev.agent} 最终存活`);
+          (ev.agents || []).forEach((name) => this.setAgentState(name, 'alive'));
+          this.liveLabel = `${this.winnerLabel || ev.agent} 胜出`;
+          this.beginStage(ev.agent, `${this.winnerLabel || ev.agent} 胜出`);
           this.votingMode = false;
           this.waitingMode = false;
           this.tiebreakAgents = [];
@@ -4017,7 +4081,7 @@ Vue.createApp({
           this.activeAgent = this.winnerName || '';
           this.activeStage = this.runMode === 'review'
             ? (this.reviewRecommendedAgent ? `${this.reviewRecommendedAgent} 获推荐` : '评审结束')
-            : this.winnerName ? `${this.winnerName} 胜出` : '比赛结束';
+            : this.winnerLabel ? `${this.winnerLabel} 胜出` : '比赛结束';
           this.stageStartedAt = 0;
           this.votingMode = false;
           this.waitingMode = false;
@@ -4141,6 +4205,8 @@ Vue.createApp({
           lastElapsed: 0,
         }));
         this.reviewJudge = transcript.judge || null;
+        this.winChecks = transcript.win_checks || [];
+        this.winCheck = this.winChecks.length ? this.winChecks[this.winChecks.length - 1] : null;
         const labelMap = Object.fromEntries(
           (transcript.labels || []).map((item) => [item.agent, item]),
         );
@@ -4190,6 +4256,9 @@ Vue.createApp({
         this.statusText = '历史回放';
         this.liveLabel = '历史提问回放';
         this.winnerName = transcript.recommended_agent || transcript.winner || '';
+        this.winnerAgents = transcript.winner_agents?.length
+          ? transcript.winner_agents
+          : (this.winnerName ? [this.winnerName] : []);
         for (const record of transcript.rounds || []) {
           const round = this.ensureRound(record.no);
           round.order = record.order || [];

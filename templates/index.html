@@ -279,7 +279,7 @@
               </div>
             </div>
 
-            <div v-if="runMode === 'review'" class="rule__section">
+            <div class="rule__section">
               <label class="rule__label" for="judge-model">独立裁判</label>
               <select id="judge-model" class="mode-select" v-model="reviewJudgeId"
                 @change="sameSourceWarning = ''">
@@ -291,9 +291,11 @@
                 </option>
               </select>
               <p class="rule__note rule__note--sm" :class="{ bad: !judgeCandidates.length }">
-                {{ judgeCandidates.length
-                  ? '裁判不提交方案，只看到乱序后的匿名方案。'
-                  : '需先在模型页添加一个不参赛的裁判模型。' }}
+                {{ !judgeCandidates.length
+                  ? '需先在模型页添加一个不参赛的裁判模型。'
+                  : runMode === 'review'
+                    ? '裁判不提交方案，只看到乱序后的匿名方案。'
+                    : '每次淘汰后由裁判核验胜出标准；条件成立即结束比赛。' }}
               </p>
             </div>
 
@@ -331,7 +333,7 @@
               <div class="rule__plan" aria-label="赛程规则">
                 <span><i>01</i><b>独立开场</b><em>首轮保留分歧，不判收敛</em></span>
                 <span><i>02</i><b>交叉裁决</b><em>第 2 轮起投票，逐轮淘汰</em></span>
-                <span><i>03</i><b>完整收束</b><em>不因等待或用量中途停止</em></span>
+                <span><i>03</i><b>胜出标准核验</b><em>每次淘汰后由独立裁判判断</em></span>
               </div>
               <p class="rule__note rule__note--sm">
                 本轮上限 {{ Math.max(selectedModelIds.length, 2) }} 轮；收敛读数只展示赛况，不跳过裁决。
@@ -419,7 +421,21 @@
         <span v-if="waitingMode" class="council-livebar__metric">
           已等待 {{ waitingSeconds }}s
         </span>
+        <span v-if="runMode !== 'review' && reviewJudge?.name" class="council-livebar__metric">
+          裁判 {{ reviewJudge.name }}
+        </span>
+        <span v-if="runMode !== 'review' && winCheck"
+          class="council-livebar__metric" :class="{ 'is-win': winCheck.met }">
+          {{ winCheck.met ? '胜出标准已满足' : '胜出标准未满足' }}
+        </span>
       </div>
+
+      <section v-if="runMode !== 'review' && winCheck" class="win-check-panel"
+        :class="{ met: winCheck.met }" aria-live="polite">
+        <span>胜出标准核验 · 第 {{ winCheck.round }} 轮</span>
+        <b>{{ winCheck.met ? '条件成立' : '继续比赛' }} · {{ winCheck.judge || reviewJudge?.name || '裁判' }}</b>
+        <p>{{ winCheck.error || winCheck.reason || '等待裁判说明。' }}</p>
+      </section>
 
       <section v-if="decisionRunId && !running" class="decision-bar decision-bar--venue" aria-label="决策记录">
         <div class="decision-bar__head">
@@ -1039,10 +1055,12 @@
         </div>
         <div class="record-stat record-stat--winner">
           <span>{{ runMode === 'review' ? '推荐方案' : '最终裁决' }}</span>
-          <b>{{ runMode === 'review' ? (reviewRecommendedAgent || '未决') : (winnerName || '未决') }}</b>
+          <b>{{ runMode === 'review' ? (reviewRecommendedAgent || '未决') : (winnerLabel || '未决') }}</b>
           <small>{{ runMode === 'review'
             ? (reviewJudgeResult?.recommended || 'no recommendation')
-            : (winnerName ? agentModel(winnerName) : 'no winner') }}</small>
+            : (winnerName
+              ? (winnerAgents.length > 1 ? `${winnerAgents.length} 人共同胜出` : agentModel(winnerName))
+              : 'no winner') }}</small>
         </div>
       </div>
 
@@ -1160,7 +1178,7 @@
                 :color="agentColor(final.agent)" state="winner" :size="54"></robot-avatar>
               <div>
                 <span>FINAL DECISION · 最终总结</span>
-                <h2>{{ final.agent }}</h2>
+                <h2>{{ winnerLabel || final.agent }}</h2>
                 <p v-if="agentModel(final.agent)" class="record-final__model">
                   {{ agentModel(final.agent) }}
                 </p>

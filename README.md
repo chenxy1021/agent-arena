@@ -46,7 +46,7 @@ invent hidden chain-of-thought; when a compatible provider returns
 | --- | --- | --- |
 | Best for | Fast comparison of executable plans | Stress-testing a contested position with a specific win rule |
 | Participants | 2-8 models | 2-8 models |
-| Judge | One independent model outside the lineup | Participants vote on one another |
+| Judge | One independent model outside the lineup | One independent model checks the win condition after each elimination |
 | Win condition | Not applicable | Required; defaults to `Vote until one remains` |
 | Typical cost | `N + 2` calls | Multi-round, usually slower |
 | Output | Comparison matrix, recommendation, rejection reasons, synthesis | Winner or undecided result with the full debate trail |
@@ -78,7 +78,8 @@ Requirements:
 - [uv](https://docs.astral.sh/uv/)
 - For review mode, at least three model configurations: two participants and one
   independent judge
-- For custom mode, at least two model configurations
+- For custom mode, at least three model configurations: two participants and one
+  independent win-condition judge
 
 ```bash
 git clone https://github.com/chenxy1021/agent-arena.git
@@ -104,11 +105,12 @@ First run:
 
 1. Open **Models** and register the endpoints you want to use.
 2. Open **Setup** and choose **Plan Review** or **Custom Mode**.
-3. Select 2-8 participants. For plan review, also select a judge that is not in
-   the participant list.
+3. Select 2-8 participants. Both modes also require a judge that is not in the
+   participant list.
 4. For custom mode, enter a required win condition (for example, `Vote until one
-   remains`, or a camp-based rule). Enter the proposition, background,
-   constraints and evaluation notes.
+   remains`, or a camp-based rule). After each elimination, the judge checks it;
+   when the condition is met, the named winners are declared and the match ends.
+   Enter the proposition, background, constraints and evaluation notes.
 5. Start the run.
 
 **Preview match** uses local frontend mock data. It does not call a provider,
@@ -215,7 +217,7 @@ tests/                    mock and loopback tests
 | `PUT` | `/api/models/{id}` | Update a model |
 | `DELETE` | `/api/models/{id}` | Delete a model |
 | `POST` | `/api/models/suggest-name` | Ask a model for a display name |
-| `POST` | `/api/runs` | Create and start a review or custom elimination run; `win_condition` is required |
+| `POST` | `/api/runs` | Create and start a review or custom elimination run; `win_condition` and `judge_model_id` are required |
 | `POST` | `/api/runs/{id}/stop` | Request cancellation |
 | `GET` | `/api/runs/active` | Read the active run |
 | `GET` | `/api/runs/{id}/events` | Subscribe to the SSE stream |
@@ -226,7 +228,8 @@ tests/                    mock and loopback tests
 Review SSE events include independent answer progress, anonymized labels,
 judge retries, score results, recommendation and synthesis. Custom mode SSE events
 include speech streams, waiting heartbeats, parallel progress, vote progress,
-scores, tiebreaks, eliminations, claims, convergence and archive completion.
+scores, tiebreaks, eliminations, win-condition checks, claims, convergence and
+archive completion.
 
 ## Data and Security
 

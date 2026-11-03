@@ -329,6 +329,28 @@ class TournamentScheduleTest(unittest.TestCase):
         ]
         self.assertEqual(voting_rounds, [2, 3])
 
+    def test_judge_win_condition_can_end_match_early(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = RecordingSink()
+            judge = MockAgent("judge", win_condition_met=True)
+            result = Arena(
+                [MockAgent("a"), MockAgent("b"), MockAgent("c")],
+                ArenaConfig(
+                    proposition="test",
+                    out_dir=Path(tmp),
+                    win_condition="甲、乙同阵营，淘汰丙即获胜",
+                ),
+                sink=sink,
+                judge=judge,
+            ).run()
+
+        self.assertEqual(result.winner_agents, ["a", "b"])
+        self.assertTrue(result.judge)
+        self.assertTrue(result.win_checks)
+        self.assertTrue(result.win_checks[-1]["met"])
+        self.assertIn("裁判认定胜出标准已满足", result.stop_reason)
+        self.assertTrue(any(event["kind"] == "win_check" for event in sink.events))
+
 
 class ClaimParsingTest(unittest.TestCase):
     def test_parses_claim_tag(self) -> None:

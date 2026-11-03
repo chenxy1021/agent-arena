@@ -33,9 +33,11 @@ class RunPresetTest(unittest.TestCase):
         transcript = {
             "proposition": "test",
             "vote_mode": "support",
+            "judge": {"name": "裁判", "model": "judge-model"},
             "setup": {
                 "model_ids": [2, 3],
                 "vote_mode": "support",
+                "judge_model_id": 4,
                 "speech_mode": "sequential_live",
                 "timeout": 90,
                 "background": "context",
@@ -50,6 +52,7 @@ class RunPresetTest(unittest.TestCase):
         configs = [
             {"id": 2, "name": "A", "model": "new-model"},
             {"id": 3, "name": "B", "model": "model-b"},
+            {"id": 4, "name": "裁判", "model": "judge-model"},
         ]
 
         preset = build_run_preset(transcript, configs)
@@ -62,6 +65,7 @@ class RunPresetTest(unittest.TestCase):
         self.assertEqual(preset["criteria"], ["criterion"])
         self.assertEqual(preset["mode"], "debate")
         self.assertEqual(preset["win_condition"], "投票至最后一人")
+        self.assertEqual(preset["judge_model_id"], 4)
 
     def test_review_preset_restores_judge_and_perspective_switch(self) -> None:
         transcript = {

@@ -1289,6 +1289,52 @@
   box-shadow: 0 0 0 3px var(--focus-halo);
 }
 
+.council-livebar__metric.is-win {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--live) 48%, var(--hairline));
+  border-radius: 999px;
+  color: var(--live);
+  background: var(--live-weak);
+}
+
+.win-check-panel {
+  display: grid;
+  grid-template-columns: minmax(150px, .35fr) minmax(0, 1fr);
+  gap: 4px 20px;
+  width: min(100%, var(--page-max));
+  margin: 12px auto 0;
+  padding: 14px 18px;
+  border: 1px solid var(--hairline-strong);
+  border-left: 3px solid var(--danger);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+}
+
+.win-check-panel.met {
+  border-left-color: var(--live);
+  background: linear-gradient(90deg, var(--live-weak), transparent);
+}
+
+.win-check-panel span {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+}
+
+.win-check-panel b {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.win-check-panel p {
+  grid-column: 2;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .win-condition-actions {
   display: flex;
   align-items: flex-start;
@@ -1365,6 +1411,14 @@
     grid-template-columns: 1fr;
     gap: 5px;
     padding: 12px;
+  }
+
+  .win-check-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .win-check-panel p {
+    grid-column: 1;
   }
 }
 

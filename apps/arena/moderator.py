@@ -119,7 +119,10 @@ class ArenaResult:
     rounds: list[RoundRecord]
     eliminated: list[dict[str, Any]]
     winner: str | None
+    winner_agents: list[str]
     final_answer: str
+    judge: dict[str, Any] = field(default_factory=dict)
+    win_checks: list[dict[str, Any]] = field(default_factory=list)
     claims: list[dict[str, Any]] = field(default_factory=list)
     setup: dict[str, Any] = field(default_factory=dict)
     budget: dict[str, Any] = field(default_factory=dict)
@@ -256,6 +259,35 @@ def _iter_json_objects(text: str):
                     yield obj
 
 
+def parse_win_check(text: str, active: Sequence[str]) -> dict[str, Any]:
+    """Parse and constrain the judge's custom win-condition verdict."""
+    valid = {name for name in active}
+    for obj in _iter_json_objects(text or ""):
+        if "met" not in obj:
+            continue
+        met = obj.get("met")
+        if not isinstance(met, bool):
+            return {"met": False, "winners": [], "reason": "", "error": "裁判 met 不是布尔值"}
+        raw_winners = obj.get("winners") or []
+        if not isinstance(raw_winners, list):
+            return {"met": False, "winners": [], "reason": "", "error": "裁判 winners 不是数组"}
+        winners: list[str] = []
+        for item in raw_winners:
+            name = _clean_candidate(str(item))
+            if name in valid and name not in winners:
+                winners.append(name)
+        reason = str(obj.get("reason") or "").strip()[:MAX_REASON_CHARS]
+        if met and not winners:
+            return {
+                "met": False,
+                "winners": [],
+                "reason": reason,
+                "error": "裁判判定已满足，但没有给出有效胜者",
+            }
+        return {"met": met, "winners": winners, "reason": reason, "error": ""}
+    return {"met": False, "winners": [], "reason": "", "error": "裁判未返回可解析 JSON"}
+
+
 def _ballot_target(text: str, valid: Sequence[str], voter: str) -> tuple[str | None, str]:
     """解析当前 JSON ballot 的投票目标与理由。"""
     pool = [v for v in valid if v != voter]
@@ -351,7 +383,13 @@ def assign_names(agents: Sequence[Any]) -> None:
 # 主赛制
 # ----------------------------------------------------------------------
 class Arena:
-    def __init__(self, agents: Sequence[Any], cfg: ArenaConfig, sink: EventSink | None = None):
+    def __init__(
+        self,
+        agents: Sequence[Any],
+        cfg: ArenaConfig,
+        sink: EventSink | None = None,
+        judge: Any | None = None,
+    ):
         if len(agents) < 2:
             raise ValueError("至少需要 2 个 agent 才能开赛")
         if cfg.vote_mode not in VOTE_MODES:
@@ -362,6 +400,7 @@ class Arena:
         assign_names(self.agents)
         self.cfg = cfg
         self.sink: EventSink = sink or NullSink()
+        self.judge = judge
 
         stamp = time.strftime("%Y%m%d-%H%M%S")
         suffix = f"-{cfg.run_id}" if cfg.run_id else ""
@@ -453,6 +492,8 @@ class Arena:
         active = list(self.agents)
         eliminated: list[dict[str, Any]] = []
         rounds: list[RoundRecord] = []
+        win_checks: list[dict[str, Any]] = []
+        judge_winners: list[Any] = []
         max_rounds = cfg.max_rounds or max(len(active), 1)
         converged = False
         convergence_hits = 0
@@ -463,6 +504,7 @@ class Arena:
             agents=[self._agent_dict(a) for a in active],
             vote_mode=cfg.vote_mode,
             win_condition=cfg.win_condition,
+            judge=self._agent_dict(self.judge) if self.judge else {},
             max_rounds=max_rounds,
             speech_mode=cfg.speech_mode,
         )
@@ -512,6 +554,17 @@ class Arena:
                 self._rounds_cache.append(record)
                 if len(active) <= 1:
                     break
+                check = self._check_win_condition(active, eliminated, rounds, rnd)
+                if check:
+                    win_checks.append(check)
+                    if check["met"]:
+                        judge_winners = [
+                            a for a in active if a.name in set(check["winners"])
+                        ]
+                        self._stop_reason = (
+                            f"裁判认定胜出标准已满足：{check.get('reason') or '条件成立'}"
+                        )
+                        break
                 continue
 
             # 立场离散度只作为赛况读数；首轮独立开场不能据此结束比赛。
@@ -588,8 +641,20 @@ class Arena:
             self._elim_round[out.name] = rnd
             rounds.append(record)
             self._rounds_cache.append(record)
+            check = self._check_win_condition(active, eliminated, rounds, rnd)
+            if check:
+                win_checks.append(check)
+                if check["met"]:
+                    judge_winners = [
+                        a for a in active if a.name in set(check["winners"])
+                    ]
+                    self._stop_reason = (
+                        f"裁判认定胜出标准已满足：{check.get('reason') or '条件成立'}"
+                    )
+                    break
 
-        winner_agent = active[0] if len(active) == 1 else None
+        winning_agents = judge_winners or ([active[0]] if len(active) == 1 else [])
+        winner_agent = winning_agents[0] if winning_agents else None
         if winner_agent is None and converged and active:
             scored_round = next((item for item in reversed(rounds) if item.scores), None)
             if scored_round:
@@ -603,7 +668,9 @@ class Arena:
                 ranked = sorted(active, key=convergence_key, reverse=True)
                 if len(active) == 1 or convergence_key(ranked[0]) > convergence_key(ranked[1]):
                     winner_agent = ranked[0]
+                    winning_agents = [winner_agent]
         winner = winner_agent.name if winner_agent else None
+        winner_names = [agent.name for agent in winning_agents]
         final_text = (
             self._final_statement(winner_agent, eliminated, rounds)
             if winner_agent else ""
@@ -625,7 +692,7 @@ class Arena:
                 for agent in active
             )
         if winner:
-            self.sink.emit("winner", agent=winner)
+            self.sink.emit("winner", agent=winner, agents=winner_names)
             if final_text:
                 self.sink.emit("final", agent=winner, text=final_text)
 
@@ -647,7 +714,10 @@ class Arena:
             rounds=rounds,
             eliminated=eliminated,
             winner=winner,
+            winner_agents=winner_names,
             final_answer=final_text,
+            judge=self._agent_dict(self.judge) if self.judge else {},
+            win_checks=win_checks,
             claims=self._claims,
             setup={
                 "mode": "debate",
@@ -657,6 +727,8 @@ class Arena:
                 ],
                 "vote_mode": cfg.vote_mode,
                 "win_condition": cfg.win_condition,
+                "judge_model_id": int(getattr(self.judge, "config_id", 0) or 0)
+                if self.judge else 0,
                 "speech_mode": cfg.speech_mode,
                 "timeout": cfg.timeout,
                 "background": cfg.background,
@@ -675,6 +747,7 @@ class Arena:
             duration=result.duration,
             rounds=len(rounds),
             winner=winner,
+            agents=winner_names,
             run_dir=str(self.run_dir),
         )
         return result
@@ -1392,6 +1465,61 @@ class Arena:
 
         return None, edge, f"{len(tied)} 人评分、票数与新增主张数完全相同，结果未决"
 
+    def _check_win_condition(
+        self,
+        active: Sequence[Any],
+        eliminated: Sequence[dict[str, Any]],
+        rounds: Sequence[RoundRecord],
+        round_no: int,
+    ) -> dict[str, Any] | None:
+        if self.judge is None:
+            return None
+        active_names = [agent.name for agent in active]
+        self.sink.emit(
+            "win_check_start",
+            round_no=round_no,
+            agent=self.judge.name,
+            alive=active_names,
+            win_condition=self.cfg.win_condition,
+        )
+        latest = [
+            (speech.agent, speech.text)
+            for speech in (rounds[-1].speeches if rounds else [])
+            if not speech.error
+        ]
+        prompt = prompts.build_win_check_prompt(
+            win_condition=self.cfg.win_condition,
+            proposition=self.cfg.proposition,
+            active=active_names,
+            eliminated=[(item["agent"], item["reason"]) for item in eliminated],
+            round_no=round_no,
+            latest_speeches=latest,
+            background=self.cfg.background,
+            constraints=self.cfg.constraints,
+        )
+        res = self._ask_with_progress(self.judge, prompt, "胜出标准核验")
+        self._record_usage(self.judge, res)
+        if res.cancelled:
+            check = {
+                "met": False,
+                "winners": [],
+                "reason": "",
+                "error": "核验被中止",
+            }
+        elif res.error:
+            check = {
+                "met": False,
+                "winners": [],
+                "reason": "",
+                "error": res.error,
+            }
+        else:
+            check = parse_win_check(res.text, active_names)
+        check["round"] = round_no
+        check["judge"] = self.judge.name
+        self.sink.emit("win_check", **check)
+        return check
+
     def _final_statement(
         self,
         winner: Any,
@@ -1429,6 +1557,9 @@ class Arena:
 
 
 def run_arena(
-    agents: Sequence[Any], cfg: ArenaConfig, sink: EventSink | None = None
+    agents: Sequence[Any],
+    cfg: ArenaConfig,
+    sink: EventSink | None = None,
+    judge: Any | None = None,
 ) -> ArenaResult:
-    return Arena(agents, cfg, sink).run()
+    return Arena(agents, cfg, sink, judge).run()

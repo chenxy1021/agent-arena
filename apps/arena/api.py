@@ -214,6 +214,7 @@ def history(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
             or (transcript.get("setup") or {}).get("win_condition")
             or ""
         )
+        run["winner_agents"] = list(transcript.get("winner_agents") or [])
         run["converged"] = bool(transcript.get("converged"))
         run["recommended_agent"] = str(transcript.get("recommended_agent") or "")
         run["judge_name"] = str((transcript.get("judge") or {}).get("name") or "")
@@ -273,7 +274,7 @@ def build_run_preset(
             "model": str(participant.get("model") or participant.get("label") or ""),
         })
     missing_judge: dict[str, str] | None = None
-    if mode == "review":
+    if mode in ("review", "debate"):
         if not judge_model_id:
             missing_judge = {"name": "裁判模型", "model": ""}
         elif judge_model_id not in by_id:

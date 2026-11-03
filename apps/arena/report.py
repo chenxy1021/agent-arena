@@ -32,10 +32,13 @@ def _md(result: ArenaResult) -> str:
     add("- **模式**：自定义模式")
     add(f"- **规则**：{MODE_LABEL.get(result.vote_mode, result.vote_mode)}")
     add(f"- **胜出标准**：{result.win_condition}")
+    if result.judge:
+        add(f"- **胜出标准裁判**：{result.judge.get('name')} · {result.judge.get('label')}")
     add(f"- **开始时间**：{result.started_at}")
     add(f"- **耗时**：{result.duration}s")
     add(f"- **参赛者**：{', '.join(p['name'] for p in result.participants)}")
-    add(f"- **最终存活**：{result.winner or '（无）'}")
+    winner_label = "、".join(result.winner_agents or ([result.winner] if result.winner else []))
+    add(f"- **最终胜者**：{winner_label or '（无）'}")
     add(f"- **发言方式**：{result.speech_mode}")
     if result.converged:
         add("- **共识**：至少有两位存活者的立场趋于一致")
@@ -119,9 +122,20 @@ def _md(result: ArenaResult) -> str:
             )
         add("")
 
+    if result.win_checks:
+        add("## 胜出标准核验\n")
+        for check in result.win_checks:
+            status = "已满足" if check.get("met") else "未满足"
+            winners = "、".join(check.get("winners") or []) or "—"
+            add(
+                f"- 第 {check.get('round')} 轮：**{status}**"
+                f" · 胜者 {winners} · {check.get('reason') or check.get('error') or '—'}"
+            )
+        add("")
+
     if result.final_answer:
         add("## 最终结论\n")
-        add(f"**{result.winner}**\n")
+        add(f"**{winner_label or result.winner}**\n")
         add(result.final_answer.strip() + "\n")
 
     return "\n".join(lines)

@@ -285,6 +285,63 @@ def build_tiebreak_speech_prompt(
 【主张】<一句话原子命题>"""
 
 
+def build_win_check_prompt(
+    *,
+    win_condition: str,
+    proposition: str,
+    active: Sequence[str],
+    eliminated: Sequence[tuple[str, str]],
+    round_no: int,
+    latest_speeches: Sequence[tuple[str, str]],
+    background: str = "",
+    constraints: Sequence[str] | None = None,
+) -> str:
+    """Ask the independent judge whether the custom win condition is now true."""
+    eliminated_block = (
+        "\n".join(f"- {name}：{why}" for name, why in eliminated) if eliminated else "无"
+    )
+    speech_block = (
+        "\n\n".join(
+            f"【{name}】\n{_clip(text, LAST_ROUND_CHARS)}"
+            for name, text in latest_speeches
+        )
+        if latest_speeches
+        else "（本轮没有可读取的发言）"
+    )
+    context = _context_block(background, constraints)
+    return f"""你是自定义淘汰赛的独立胜出标准裁判，不参与发言或投票。
+你的唯一任务是判断：按用户写明的胜出标准，当前赛况是否已经产生胜者。
+
+【命题】
+{proposition}
+
+【胜出标准】
+{win_condition.strip()}
+
+{context}
+
+【第 {round_no} 轮结束后仍存活】
+{", ".join(active)}
+
+【已淘汰】
+{eliminated_block}
+
+【最近发言】
+{speech_block}
+
+【判定规则】
+1. 严格按胜出标准判断，不得自行增加条件，也不要猜测未写明的阵营关系。
+2. 如果标准尚未满足，met 必须为 false，winners 必须为空数组。
+3. 如果标准已满足，met 为 true，winners 只能填写当前仍存活的参赛者名字。
+4. 若标准描述了多个阵营或多人共同获胜，可以把所有获胜成员都写入 winners。
+5. 只输出一个 JSON 对象，不要 Markdown 代码块、解释或前后缀。
+
+【输出格式】
+{{"met": true, "winners": ["当前存活者名字"], "reason": "一句话说明为何满足"}}
+或
+{{"met": false, "winners": [], "reason": "一句话说明还缺什么条件"}}"""
+
+
 def build_final_prompt(
     *,
     winner: str,

@@ -118,10 +118,11 @@ class Manager:
 
         judge: ApiModelAgent | None = None
         judge_same_model = False
-        if payload.mode == "review":
+        if payload.mode in ("review", "debate"):
             judge_id = int(payload.judge_model_id or 0)
             if not judge_id:
-                raise ValueError("方案评审需要选择独立裁判模型")
+                mode_label = "方案评审" if payload.mode == "review" else "自定义模式"
+                raise ValueError(f"{mode_label}需要选择独立裁判模型")
             if judge_id in seen:
                 raise ValueError("裁判不能同时参赛")
             judge_config = configs.get(judge_id) or database.get_model(judge_id)
@@ -134,7 +135,7 @@ class Manager:
             )
             if judge_same_model:
                 raise ConflictError(
-                    "裁判与参赛模型同源，评审可能偏向自身；本场未运行，请更换裁判"
+                    "裁判与参赛模型同源，可能影响裁决；本场未运行，请更换裁判"
                 )
             judge = ApiModelAgent(
                 config_id=judge_id,
@@ -189,7 +190,7 @@ class Manager:
                 arena = (
                     ReviewArena(agents, judge, review_cfg, sink=run.sink)
                     if payload.mode == "review" and judge
-                    else Arena(agents, cfg, sink=run.sink)
+                    else Arena(agents, cfg, sink=run.sink, judge=judge)
                 )
                 arena_holder["arena"] = arena
                 arena.cancel_hook = run.cancel_event
@@ -201,6 +202,9 @@ class Manager:
                 winner = getattr(result, "winner", None) or getattr(
                     result, "recommended_agent", None
                 )
+                winner_agents = getattr(result, "winner_agents", None) or []
+                if winner_agents:
+                    winner = " / ".join(winner_agents)
                 database.finish_run(
                     run_id=run_id,
                     status=run.status,

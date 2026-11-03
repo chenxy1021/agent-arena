@@ -63,6 +63,7 @@ class MockAgent:
     name: str
     seed: int = 0
     fail_rate: float = 0.0
+    win_condition_met: bool = False
 
     def __post_init__(self) -> None:
         self.rng = random.Random(f"{self.seed}-{self.name}")
@@ -91,7 +92,9 @@ class MockAgent:
         if self.rng.random() < self.fail_rate:
             return CallResult(elapsed=time.monotonic() - started, error="mock 注入的调用失败")
 
-        if "投票环节" in prompt:
+        if "胜出标准裁判" in prompt:
+            text = self._win_check(prompt)
+        elif "投票环节" in prompt:
             text = self._vote(prompt)
         elif "最终胜者" in prompt:
             text = self._final(prompt)
@@ -100,6 +103,17 @@ class MockAgent:
         if on_output:
             on_output(text)
         return CallResult(text=text, elapsed=time.monotonic() - started)
+
+    def _win_check(self, prompt: str) -> str:
+        if not self.win_condition_met:
+            return '{"met": false, "winners": [], "reason": "当前赛况尚未满足胜出标准"}'
+        m = re.search(r"【第 \d+ 轮结束后仍存活】\n(.*)", prompt)
+        alive = [name.strip() for name in m.group(1).split(",") if name.strip()] if m else []
+        return json.dumps({
+            "met": True,
+            "winners": alive,
+            "reason": "胜出标准条件已满足",
+        }, ensure_ascii=False)
 
     # -- 内部 ----------------------------------------------------------
     def _speech(self, prompt: str) -> str:
