@@ -559,6 +559,7 @@ Vue.createApp({
       reviewJudge: null,
       reviewRows: [],
       reviewJudgeResult: null,
+      reviewBlocked: '',
       reviewSynthesis: '',
       reviewSynthesisSections: null,
       reviewAbsent: [],
@@ -2290,6 +2291,7 @@ Vue.createApp({
       this.reviewJudge = null;
       this.reviewRows = [];
       this.reviewJudgeResult = null;
+      this.reviewBlocked = '';
       this.reviewSynthesis = '';
       this.reviewSynthesisSections = null;
       this.reviewAbsent = [];
@@ -3122,6 +3124,13 @@ Vue.createApp({
           ];
           break;
 
+        case 'review_blocked':
+          this.reviewBlocked = ev.reason || '有效方案不足，评审已停止';
+          this.reviewAbsent = [...this.reviewAbsent, ...(ev.absent || [])];
+          this.reviewPhase = 'done';
+          this.liveLabel = this.reviewBlocked;
+          break;
+
         case 'agent_info': {
           let participant = this.participants.find((item) => item.name === ev.name);
           if (!participant) {
@@ -3746,6 +3755,8 @@ Vue.createApp({
         this.reviewPhase = transcript.mode === 'review'
           ? (transcript.synthesis ? 'done' : transcript.scores ? 'synthesis' : 'answers')
           : '';
+        this.reviewBlocked = transcript.mode === 'review' && !transcript.scores
+          ? (transcript.stop_reason || '评审未完成') : '';
         this.status = 'done';
         this.statusText = '历史回放';
         this.liveLabel = '历史提问回放';

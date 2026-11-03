@@ -24,6 +24,8 @@ class ReviewAgent:
     def ask(self, prompt, timeout=0, retries=0, on_output=None):
         self.calls += 1
         self.prompts.append(prompt)
+        if self.plan_name == "FAIL":
+            raise RuntimeError("接口连接失败")
         if "匿名方案" in prompt:
             labels = [
                 part.split("】", 1)[0].removeprefix("【")
@@ -148,6 +150,26 @@ class ReviewArenaTest(unittest.TestCase):
         self.assertTrue(any(
             event["kind"] == "saved" for event in sink.events
         ))
+
+    def test_single_valid_answer_blocks_review_with_notice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            judge = ReviewAgent("裁判", "裁判", 0)
+            sink = RecordingSink()
+            arena = ReviewArena(
+                [ReviewAgent("甲", "A", 8), ReviewAgent("乙", "FAIL", 0)],
+                judge,
+                ReviewConfig(proposition="test", out_dir=Path(tmp), run_id="x"),
+                sink=sink,
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                arena.run()
+
+        self.assertIn("有效方案不足", str(ctx.exception))
+        blocked = next(
+            event for event in sink.events if event["kind"] == "review_blocked"
+        )
+        self.assertEqual(blocked["absent"][0]["agent"], "乙")
 
     def test_judge_parser_clamps_scores_and_flags_missing_dimensions(self) -> None:
         parsed, anomalies = parse_judgement(

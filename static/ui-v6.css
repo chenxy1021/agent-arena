@@ -414,6 +414,30 @@
   overflow: hidden;
 }
 
+.review-blocked {
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 61, 110, .34);
+  border-radius: 14px;
+  background: rgba(255, 61, 110, .07);
+}
+
+.review-blocked strong {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.review-blocked p {
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+[data-theme="light"] .review-blocked {
+  background: rgba(180, 30, 66, .06);
+}
+
 .review-verdict__hero {
   padding: 20px;
   border-bottom: 1px solid var(--hairline);

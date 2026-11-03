@@ -448,6 +448,11 @@
             </span>
           </div>
 
+          <section v-if="reviewBlocked" class="review-blocked" role="alert">
+            <strong>{{ reviewBlocked }}</strong>
+            <p>评审需要至少 2 份有效方案。下方会保留已提交的方案与缺席原因；修好模型配置后可以「再赛一场」。</p>
+          </section>
+
           <div class="review-layout">
             <section class="review-answers" aria-label="方案列表">
               <article v-for="row in reviewRows" :key="'review-' + row.agent"
@@ -485,6 +490,9 @@
             </section>
 
             <aside class="review-verdict" aria-label="评审结果">
+              <section v-if="reviewBlocked" class="review-warnings">
+                <p>评审已停止：{{ reviewBlocked }}</p>
+              </section>
               <section class="review-verdict__hero" :class="{ ready: reviewJudgeResult }">
                 <span>RECOMMENDATION</span>
                 <b>{{ reviewRecommendedAgent || '等待评审' }}</b>

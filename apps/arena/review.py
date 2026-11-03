@@ -490,6 +490,7 @@ class ReviewArena:
             raise ValueError("全部参赛模型作答失败，无法进入评审")
         if len(valid) < 2:
             message = "有效方案不足 2 份，无法进入对比评审"
+            self.sink.emit("review_blocked", reason=message, absent=absent)
             insufficient = self._result(
                 started,
                 t0,
