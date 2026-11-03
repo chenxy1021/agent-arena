@@ -67,6 +67,8 @@
     "需先在模型页添加一个不参赛的裁判模型。": "Add a non-competing judge model on the Models page first.",
     "分配差异化视角": "Assign distinct perspectives",
     "成本 / 增长 / 风险 / 体验 / 技术": "Cost / growth / risk / experience / technology",
+    "每份方案分别侧重成本、增长、风险、体验或技术，避免答案同质化":
+      "Each plan focuses on cost, growth, risk, experience, or technology to avoid look-alike answers",
     "单次调用限时": "Call timeout",
     "评审流程": "Review flow",
     "独立作答": "Independent answers",
