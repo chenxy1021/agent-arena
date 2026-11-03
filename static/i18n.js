@@ -215,6 +215,7 @@
     "人存活": "active",
     "结束方式": "Outcome",
     "最终总结": "Final decision",
+    "裁判总结": "Judge synthesis",
     "保留的分歧": "Unresolved disagreement",
     "未解决": "Unresolved",
     "前提": "Premises",

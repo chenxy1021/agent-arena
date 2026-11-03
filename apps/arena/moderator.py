@@ -672,7 +672,7 @@ class Arena:
         winner = winner_agent.name if winner_agent else None
         winner_names = [agent.name for agent in winning_agents]
         final_text = (
-            self._final_statement(winner_agent, eliminated, rounds)
+            self._final_statement(winning_agents, eliminated, rounds)
             if winner_agent else ""
         )
         if winner_agent is None and len(active) > 1 and rounds and not self._stopped:
@@ -694,7 +694,8 @@ class Arena:
         if winner:
             self.sink.emit("winner", agent=winner, agents=winner_names)
             if final_text:
-                self.sink.emit("final", agent=winner, text=final_text)
+                summarizer = self.judge or winner_agent
+                self.sink.emit("final", agent=summarizer.name, text=final_text)
 
         budget = {
             "calls": int(self._usage.get("calls", 0)),
@@ -1522,17 +1523,20 @@ class Arena:
 
     def _final_statement(
         self,
-        winner: Any,
+        winners: Sequence[Any],
         eliminated: Sequence[dict[str, Any]],
         rounds: Sequence[RoundRecord],
     ) -> str:
-        self.sink.emit("thinking", agent=winner.name, role="最终总结")
+        summarizer = self.judge or winners[0]
+        self.sink.emit("thinking", agent=summarizer.name, role="最终总结")
         eliminated_claims = [
             c["text"] for c in self._claims
-            if c["author"] != winner.name and c["final_status"] != "rejected"
+            if c["author"] not in {agent.name for agent in winners}
+            and c["final_status"] != "rejected"
         ][:12]
         prompt = prompts.build_final_prompt(
-            winner=winner.name,
+            winners=[agent.name for agent in winners],
+            judge=summarizer.name,
             proposition=self.cfg.proposition,
             transcript_digest=_digest(rounds),
             eliminated=[(e["agent"], e["reason"]) for e in eliminated],
@@ -1542,8 +1546,8 @@ class Arena:
             background=self.cfg.background,
             constraints=self.cfg.constraints,
         )
-        res = self._ask_with_progress(winner, prompt, "最终总结")
-        self._record_usage(winner, res)
+        res = self._ask_with_progress(summarizer, prompt, "最终总结")
+        self._record_usage(summarizer, res)
         if res.error:
             self.sink.emit("error", message=f"最终总结失败：{res.error}")
             return ""

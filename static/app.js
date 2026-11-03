@@ -3941,7 +3941,9 @@ Vue.createApp({
           this.parallelRows = [];
           this.liveFollow = true;
           this.rounds.forEach((round) => { round.thinking = []; });
-          this.setAgentState(ev.agent, 'alive');
+          if (this.participants.some((item) => item.name === ev.agent)) {
+            this.setAgentState(ev.agent, 'alive');
+          }
           this.liveLabel = `${ev.agent} 正在整理最终结论`;
           this.beginStage(ev.agent, '正在整理最终结论');
           this.stopStream();

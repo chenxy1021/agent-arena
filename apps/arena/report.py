@@ -135,7 +135,8 @@ def _md(result: ArenaResult) -> str:
 
     if result.final_answer:
         add("## 最终结论\n")
-        add(f"**{winner_label or result.winner}**\n")
+        summarizer = result.judge.get("name") if result.judge else (winner_label or result.winner)
+        add(f"**{summarizer} 总结**\n")
         add(result.final_answer.strip() + "\n")
 
     return "\n".join(lines)

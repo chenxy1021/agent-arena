@@ -1175,15 +1175,17 @@
           <article v-if="final" class="record-final">
             <header class="record-final__head">
               <robot-avatar :name="final.agent" :spec="robotSpec(final.agent)"
-                :color="agentColor(final.agent)" state="winner" :size="54"></robot-avatar>
+                :color="agentColor(final.agent)"
+                :state="runMode === 'review' || participants.some((item) => item.name === final.agent) ? 'winner' : 'idle'"
+                :size="54"></robot-avatar>
               <div>
                 <span>FINAL DECISION · 最终总结</span>
-                <h2>{{ winnerLabel || final.agent }}</h2>
+                <h2>{{ final.agent }}</h2>
                 <p v-if="agentModel(final.agent)" class="record-final__model">
                   {{ agentModel(final.agent) }}
                 </p>
               </div>
-              <em>胜出</em>
+              <em>裁判总结</em>
             </header>
             <div v-for="(block, i) in finalBlocks(final.text)" :key="i"
               class="speech-block__para" :class="{ gap: i > 0 }">

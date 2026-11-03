@@ -583,3 +583,18 @@ class ParallelSpeechTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JudgeFinalSummaryTest(unittest.TestCase):
+    def test_final_prompt_asks_judge_to_summarize(self) -> None:
+        prompt = prompts.build_final_prompt(
+            winners=["甲"],
+            judge="裁判",
+            proposition="命题",
+            transcript_digest="要点",
+            eliminated=[("乙", "淘汰")],
+            win_condition="只剩最后一人",
+        )
+        self.assertIn("你是自定义淘汰赛的独立裁判 裁判", prompt)
+        self.assertIn("最终胜者是：甲", prompt)
+        self.assertIn("你代表裁判做整场总结", prompt)

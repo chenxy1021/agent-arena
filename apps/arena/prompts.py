@@ -344,7 +344,8 @@ def build_win_check_prompt(
 
 def build_final_prompt(
     *,
-    winner: str,
+    winners: Sequence[str],
+    judge: str,
     proposition: str,
     transcript_digest: str,
     eliminated: Sequence[tuple[str, str]],
@@ -363,7 +364,8 @@ def build_final_prompt(
         else "（没有可保留的已淘汰主张）"
     )
     context = _context_block(background, constraints)
-    return f"""你是这场多智能体辩论的最终胜者 {winner}。
+    return f"""你是自定义淘汰赛的独立裁判 {judge}，不参与发言或投票。
+本次按胜出标准判定的最终胜者是：{"、".join(winners)}。
 
 【命题】
 {proposition}
@@ -386,7 +388,8 @@ def build_final_prompt(
 {_criteria_block(criteria)}
 
 【任务】
-综合整场辩论（包括被淘汰者的有效论点），给出对命题的最终结论。
+你代表裁判做整场总结：综合整场辩论（包括被淘汰者的有效论点），给出对命题的最终结论。
+结论必须解释为什么最终胜者符合胜出标准；若有多位共同胜者，说明他们的共同贡献。
 必须明确保留尚未解决的分歧，以及结论在什么条件下不成立。
 
 【输出格式】
