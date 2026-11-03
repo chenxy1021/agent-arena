@@ -1244,7 +1244,7 @@ class Arena:
             return by_name.get(tied[0]), edge, None
 
         if allow_tiebreak:
-            return None, edge, f"{len(tied)} 人平票，进入加赛"
+            return None, edge, f"{len(tied)} 人平票（各 {edge:g} 票），进入加赛"
 
         return self._decide_tiebreak(tied, edge, by_name, record, speeches)
 

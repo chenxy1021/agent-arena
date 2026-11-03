@@ -277,21 +277,6 @@
               </p>
             </div>
 
-            <div v-if="runMode === 'debate'" class="rule__section">
-              <span class="rule__label">发言方式</span>
-              <div class="segmented segmented--split" role="group" aria-label="发言方式">
-                <button type="button" :class="{ active: speechMode === 'parallel_buffered' }"
-                  @click="speechMode = 'parallel_buffered'">并行生成</button>
-                <button type="button" :class="{ active: speechMode === 'sequential_live' }"
-                  @click="speechMode = 'sequential_live'">逐个实时</button>
-              </div>
-              <p class="rule__note rule__note--sm">
-                {{ speechMode === 'parallel_buffered'
-                  ? '同时生成，完成后全员观点同屏展开'
-                  : '逐个实时生成，能看到每个模型的思考过程' }}
-              </p>
-            </div>
-
             <div v-if="runMode === 'review'" class="rule__section">
               <label class="rule__label" for="judge-model">独立裁判</label>
               <select id="judge-model" class="mode-select" v-model="reviewJudgeId">

@@ -123,7 +123,7 @@ def start_run(payload: StartRun) -> dict[str, str]:
         run = manager.start(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"run": run.id}
+    return {"run": run.id, "mode": run.mode}
 
 
 @router.post("/runs/{run_id}/stop")

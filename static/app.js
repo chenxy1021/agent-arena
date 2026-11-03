@@ -2374,6 +2374,8 @@ Vue.createApp({
 
     async startMatch() {
       if (this.running) return;
+      // 固定本次选择的模式，避免残留 SSE 事件在启动瞬间改写 runMode。
+      const runMode = this.runMode === 'review' ? 'review' : 'debate';
       const proposition = this.proposition.trim();
       if (!proposition) {
         this.hint = '先写一个命题';
@@ -2390,7 +2392,7 @@ Vue.createApp({
         this.hintError = true;
         return;
       }
-      if (this.runMode === 'review' && !this.reviewJudgeId) {
+      if (runMode === 'review' && !this.reviewJudgeId) {
         this.hint = '方案评审需要选择一个不参赛的独立裁判';
         this.hintError = true;
         return;
@@ -2408,9 +2410,9 @@ Vue.createApp({
 
       const payload = {
         proposition,
-        mode: this.runMode,
+        mode: runMode,
         vote_mode: this.mode,
-        judge_model_id: this.runMode === 'review' ? Number(this.reviewJudgeId) : null,
+        judge_model_id: runMode === 'review' ? Number(this.reviewJudgeId) : null,
         diversify: Boolean(this.diversify),
         timeout: Number(this.timeout) || 240,
         model_ids: this.selectedModelIds,
@@ -2428,6 +2430,7 @@ Vue.createApp({
         });
         const data = await res.json();
         if (!res.ok) throw new Error(cleanError(data));
+        this.runMode = data.mode === 'review' ? 'review' : 'debate';
         this.activeRunId = data.run;
         this.openStream(data.run);
       } catch (err) {
@@ -2970,6 +2973,8 @@ Vue.createApp({
     handleEvent(ev) {
       switch (ev.kind) {
         case 'run_start':
+          // 未开赛/未回放时收到旧事件，说明是残留流，不能改写当前页面状态。
+          if (!this.running && !this.replaying) break;
           this.runMode = ev.mode === 'review' ? 'review' : 'debate';
           this.modelOutputs = {};
           this.parallelRows = [];
@@ -3658,7 +3663,7 @@ Vue.createApp({
         this.mode = preset.vote_mode || 'eliminate';
         this.reviewJudgeId = preset.judge_model_id || '';
         this.diversify = preset.diversify !== false;
-        this.speechMode = preset.speech_mode || 'parallel_buffered';
+        this.speechMode = 'parallel_buffered';
         this.timeout = Number(preset.timeout) || 240;
         this.background = preset.background || '';
         this.constraints = [...(preset.constraints || [])];

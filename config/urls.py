@@ -25,6 +25,14 @@ def create_app() -> FastAPI:
     app.include_router(router, prefix="/api")
     app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
+    @app.middleware("http")
+    async def revalidate_frontend_assets(request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            # 前端无构建产物；必须每次用 ETag 重新验证，避免浏览器长期跑旧脚本。
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(settings.TEMPLATES_DIR / "index.html")
