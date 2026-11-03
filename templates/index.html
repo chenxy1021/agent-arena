@@ -898,7 +898,7 @@
 
     <!-- 记录页 -->
     <section v-if="currentPage === 'record'" class="page page--record">
-      <header class="page-head">
+      <header class="page-head record-page-head">
         <div>
           <span class="page-head__eyebrow">Match record / 02</span>
           <h1>{{ proposition || '比赛记录' }}</h1>
@@ -906,34 +906,49 @@
             ? '每份方案、四个维度的评分、推荐与整合建议都按原样保留。'
             : '每一轮发言、每一张选票、每一次出局，都按原样留着。' }}</p>
         </div>
-        <div class="record-head-tools">
+        <div v-if="(canReuseCurrentRun && !running) || (viewingHistoryId && viewingHistoryId !== 'demo')"
+          class="record-head-actions">
           <button v-if="canReuseCurrentRun && !running"
-            type="button" class="ghost-button" @click="reuseHistoryRun(viewingHistoryId)">
+            type="button" class="cta record-primary-action" @click="reuseHistoryRun(viewingHistoryId)">
             再赛一场
           </button>
-          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
-            type="button" class="ghost-button" @click="exportRun('md')">导出 MD</button>
-          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
-            type="button" class="ghost-button" @click="exportRun('json')">JSON</button>
-          <button v-if="viewingHistoryId && viewingHistoryId !== 'demo'"
-            type="button" class="ghost-button" @click="exportRun('zip')">ZIP</button>
-          <button v-if="viewingRunStatus === 'deleted'" type="button" class="ghost-button"
-            @click="restoreCurrentRun">恢复档案</button>
-          <button v-else-if="viewingHistoryId && viewingHistoryId !== 'demo'"
-            type="button" class="ghost-button" @click="deleteCurrentRun(false)">删除档案</button>
-          <button v-if="viewingRunStatus !== 'deleted' && viewingHistoryId && viewingHistoryId !== 'demo'"
-            type="button" class="text-action text-action--danger"
-            @click="deleteCurrentRun(true)">删除档案与文件</button>
-          <div class="chips">
-            <span class="chips__label">按人</span>
-            <button type="button" class="chip" :class="{ active: !recordAgentFilter }"
-              @click="recordAgentFilter = ''">全部</button>
-            <button v-for="name in recordAgents" :key="`filter-${name}`" type="button"
-              class="chip" :class="{ active: recordAgentFilter === name }"
-              @click="selectRecordAgent(name)">{{ name }}</button>
-          </div>
+          <details v-if="viewingHistoryId && viewingHistoryId !== 'demo'" name="record-actions"
+            class="record-action-menu">
+            <summary class="ghost-button record-menu-trigger">
+              导出 <span class="record-menu-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="record-action-menu__panel">
+              <button type="button" @click="exportRun('md'); closeDetails($event)">Markdown</button>
+              <button type="button" @click="exportRun('json'); closeDetails($event)">JSON</button>
+              <button type="button" @click="exportRun('zip'); closeDetails($event)">ZIP</button>
+            </div>
+          </details>
+          <details v-if="viewingHistoryId && viewingHistoryId !== 'demo'" name="record-actions"
+            class="record-action-menu record-action-menu--more">
+            <summary class="ghost-button record-menu-trigger">
+              更多 <span class="record-menu-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="record-action-menu__panel">
+              <button v-if="viewingRunStatus === 'deleted'" type="button"
+                @click="restoreCurrentRun(); closeDetails($event)">恢复档案</button>
+              <button v-else type="button" @click="deleteCurrentRun(false); closeDetails($event)">删除档案</button>
+              <button v-if="viewingRunStatus !== 'deleted'" type="button" class="danger"
+                @click="deleteCurrentRun(true); closeDetails($event)">删除档案与文件</button>
+            </div>
+          </details>
         </div>
       </header>
+
+      <div class="record-filter-row">
+        <span class="chips__label">按人筛选</span>
+        <div class="chips">
+          <button type="button" class="chip" :class="{ active: !recordAgentFilter }"
+            @click="recordAgentFilter = ''">全部</button>
+          <button v-for="name in recordAgents" :key="`filter-${name}`" type="button"
+            class="chip" :class="{ active: recordAgentFilter === name }"
+            @click="selectRecordAgent(name)">{{ name }}</button>
+        </div>
+      </div>
 
       <section v-if="decisionRunId" class="decision-bar" aria-label="决策记录">
         <div class="decision-bar__head">

@@ -2525,6 +2525,10 @@ Vue.createApp({
       window.location.href = `/api/history/${encodeURIComponent(runId)}/export?format=${format}`;
     },
 
+    closeDetails(event) {
+      event.currentTarget.closest('details')?.removeAttribute('open');
+    },
+
     decisionLabel(kind) {
       return {
         adopted: '采纳',
